@@ -19,6 +19,7 @@ final class AppModel: ObservableObject {
     let hr: HeartRateManager
 
     init() {
+        SyncSettings.registerDefaults()
         hr = HeartRateManager(db: db)
     }
 }
