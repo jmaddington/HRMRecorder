@@ -1,5 +1,9 @@
 import ActivityKit
 import Foundation
+import os
+
+private let log = Logger(subsystem: "com.jmaddington.HRMRecorder",
+                         category: "LiveActivity")
 
 /// Owns the single lock-screen / Dynamic Island Live Activity for the
 /// recording session and brokers all ActivityKit calls.
@@ -35,8 +39,16 @@ final class LiveActivityController {
 
     /// Begin a Live Activity for a freshly started recording session.
     func start(deviceName: String, sessionStartedAt: Date, bpm: Int, contact: Bool?) {
-        guard activity == nil else { return }
-        guard ActivityAuthorizationInfo().areActivitiesEnabled else { return }
+        guard activity == nil else {
+            log.notice("start: skipped, an activity is already running")
+            return
+        }
+        let enabled = ActivityAuthorizationInfo().areActivitiesEnabled
+        log.notice("start: areActivitiesEnabled=\(enabled, privacy: .public)")
+        guard enabled else {
+            log.error("start: Live Activities are DISABLED — enable them in Settings ▸ HRM Recorder ▸ Live Activities (and Settings ▸ Face ID & Passcode ▸ Live Activities for the lock screen).")
+            return
+        }
 
         self.deviceName = deviceName
         let attributes = HRMActivityAttributes(sessionStartedAt: sessionStartedAt)
@@ -44,17 +56,20 @@ final class LiveActivityController {
             bpm: bpm, sensorContact: contact,
             deviceName: deviceName, lastUpdate: Date())
         do {
-            activity = try Activity.request(
+            let activity = try Activity.request(
                 attributes: attributes,
                 content: ActivityContent(state: state, staleDate: nil),
                 pushType: nil)
+            self.activity = activity
             lastPushedAt = Date()
             lastPushedBPM = bpm
             lastPushedContact = contact
+            log.notice("start: requested activity id=\(activity.id, privacy: .public) bpm=\(bpm)")
         } catch {
             // Live Activity is best-effort glanceable UI — never let its
             // failure affect recording.
             activity = nil
+            log.error("start: Activity.request threw: \(error.localizedDescription, privacy: .public)")
         }
     }
 
@@ -82,6 +97,7 @@ final class LiveActivityController {
         guard let activity else { return }
         self.activity = nil
         resetThrottle()
+        log.notice("end: dismissing activity id=\(activity.id, privacy: .public)")
         Task { await activity.end(nil, dismissalPolicy: .immediate) }
     }
 
@@ -92,7 +108,9 @@ final class LiveActivityController {
             self.deviceName = deviceName
             activity = existing
             resetThrottle()
+            log.notice("adopt: re-attached to existing activity id=\(existing.id, privacy: .public)")
         } else {
+            log.notice("adopt: no running activity, starting a fresh one")
             start(deviceName: deviceName,
                   sessionStartedAt: sessionStartedAt, bpm: bpm, contact: contact)
         }

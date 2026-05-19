@@ -138,6 +138,8 @@ final class HeartRateManager: NSObject, ObservableObject {
             liveActivity.start(deviceName: liveActivityDeviceName,
                                sessionStartedAt: sessionStartedAt ?? Date(),
                                bpm: heartRate, contact: sensorContact)
+        } else {
+            NSLog("[LiveActivity] iOS < 16.2 — Live Activity unavailable on this device")
         }
         UIApplication.shared.isIdleTimerDisabled = true   // keep screen awake in foreground
     }
