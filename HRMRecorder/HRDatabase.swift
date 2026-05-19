@@ -1,0 +1,308 @@
+import Foundation
+import SQLite3
+
+/// SQLite3 wants a destructor argument; SQLITE_TRANSIENT tells it to copy the
+/// bound bytes (the default-imported constant is unusable from Swift).
+private let SQLITE_TRANSIENT = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
+
+/// Thin, dependency-free wrapper around libsqlite3.
+///
+/// One row per heart-rate notification, written the moment it arrives.
+/// WAL + `synchronous = NORMAL` keeps each insert durable without stalling
+/// the ~1 Hz capture stream. All access is funneled through one serial queue.
+final class HRDatabase {
+
+    struct SessionInfo: Identifiable, Hashable {
+        let id: String
+        let startedAt: Date
+        let endedAt: Date?
+        let deviceName: String?
+        let sampleCount: Int
+    }
+
+    let fileURL: URL
+
+    private var db: OpaquePointer?
+    private var insertStmt: OpaquePointer?
+    private let queue = DispatchQueue(label: "com.hrmrecorder.db")
+
+    init() {
+        let support = (try? FileManager.default.url(for: .applicationSupportDirectory,
+                                                    in: .userDomainMask,
+                                                    appropriateFor: nil,
+                                                    create: true))
+            ?? FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        fileURL = support.appendingPathComponent("hrm.sqlite3")
+
+        queue.sync {
+            if sqlite3_open(fileURL.path, &db) != SQLITE_OK {
+                assertionFailure("Unable to open database at \(fileURL.path)")
+                return
+            }
+            exec("PRAGMA journal_mode = WAL;")
+            exec("PRAGMA synchronous = NORMAL;")
+            exec("""
+                CREATE TABLE IF NOT EXISTS sessions (
+                    id          TEXT PRIMARY KEY,
+                    started_at  REAL NOT NULL,
+                    ended_at    REAL,
+                    device_name TEXT
+                );
+                """)
+            exec("""
+                CREATE TABLE IF NOT EXISTS samples (
+                    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                    session_id  TEXT NOT NULL,
+                    ts          REAL NOT NULL,
+                    bpm         INTEGER NOT NULL,
+                    rr_ms       TEXT,
+                    contact     INTEGER,
+                    energy_kj   INTEGER
+                );
+                """)
+            exec("CREATE INDEX IF NOT EXISTS idx_samples_session ON samples(session_id);")
+            exec("CREATE INDEX IF NOT EXISTS idx_samples_ts ON samples(ts);")
+
+            sqlite3_prepare_v2(db, """
+                INSERT INTO samples (session_id, ts, bpm, rr_ms, contact, energy_kj)
+                VALUES (?, ?, ?, ?, ?, ?);
+                """, -1, &insertStmt, nil)
+        }
+    }
+
+    deinit {
+        queue.sync {
+            if insertStmt != nil { sqlite3_finalize(insertStmt) }
+            if db != nil { sqlite3_close(db) }
+        }
+    }
+
+    // MARK: - Sessions
+
+    func startSession(deviceName: String?) -> String {
+        let id = ISO8601DateFormatter.compact.string(from: Date())
+            + "-" + String(UInt16.random(in: 0...UInt16.max), radix: 16)
+        queue.async {
+            var stmt: OpaquePointer?
+            if sqlite3_prepare_v2(self.db,
+                "INSERT INTO sessions (id, started_at, device_name) VALUES (?, ?, ?);",
+                -1, &stmt, nil) == SQLITE_OK {
+                sqlite3_bind_text(stmt, 1, id, -1, SQLITE_TRANSIENT)
+                sqlite3_bind_double(stmt, 2, Date().timeIntervalSince1970)
+                if let name = deviceName {
+                    sqlite3_bind_text(stmt, 3, name, -1, SQLITE_TRANSIENT)
+                } else {
+                    sqlite3_bind_null(stmt, 3)
+                }
+                sqlite3_step(stmt)
+            }
+            sqlite3_finalize(stmt)
+        }
+        return id
+    }
+
+    func endSession(_ id: String) {
+        queue.async {
+            var stmt: OpaquePointer?
+            if sqlite3_prepare_v2(self.db,
+                "UPDATE sessions SET ended_at = ? WHERE id = ? AND ended_at IS NULL;",
+                -1, &stmt, nil) == SQLITE_OK {
+                sqlite3_bind_double(stmt, 1, Date().timeIntervalSince1970)
+                sqlite3_bind_text(stmt, 2, id, -1, SQLITE_TRANSIENT)
+                sqlite3_step(stmt)
+            }
+            sqlite3_finalize(stmt)
+        }
+    }
+
+    // MARK: - Samples (hot path — fire and forget on the serial queue)
+
+    func insertSample(sessionID: String,
+                       date: Date,
+                       bpm: Int,
+                       rr: [Int],
+                       contact: Bool?,
+                       energyKJ: Int?) {
+        queue.async {
+            guard let stmt = self.insertStmt else { return }
+            sqlite3_reset(stmt)
+            sqlite3_clear_bindings(stmt)
+            sqlite3_bind_text(stmt, 1, sessionID, -1, SQLITE_TRANSIENT)
+            sqlite3_bind_double(stmt, 2, date.timeIntervalSince1970)
+            sqlite3_bind_int(stmt, 3, Int32(bpm))
+            if rr.isEmpty {
+                sqlite3_bind_null(stmt, 4)
+            } else {
+                sqlite3_bind_text(stmt, 4, rr.map(String.init).joined(separator: ";"),
+                                  -1, SQLITE_TRANSIENT)
+            }
+            if let c = contact {
+                sqlite3_bind_int(stmt, 5, c ? 1 : 0)
+            } else {
+                sqlite3_bind_null(stmt, 5)
+            }
+            if let e = energyKJ {
+                sqlite3_bind_int(stmt, 6, Int32(e))
+            } else {
+                sqlite3_bind_null(stmt, 6)
+            }
+            sqlite3_step(stmt)
+        }
+    }
+
+    // MARK: - Reads
+
+    func sessions() -> [SessionInfo] {
+        queue.sync {
+            var out: [SessionInfo] = []
+            var stmt: OpaquePointer?
+            let sql = """
+                SELECT s.id, s.started_at, s.ended_at, s.device_name,
+                       (SELECT COUNT(*) FROM samples x WHERE x.session_id = s.id)
+                FROM sessions s
+                ORDER BY s.started_at DESC;
+                """
+            if sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK {
+                while sqlite3_step(stmt) == SQLITE_ROW {
+                    let id = String(cString: sqlite3_column_text(stmt, 0))
+                    let started = sqlite3_column_double(stmt, 1)
+                    let ended: Date? = sqlite3_column_type(stmt, 2) == SQLITE_NULL
+                        ? nil : Date(timeIntervalSince1970: sqlite3_column_double(stmt, 2))
+                    let name: String? = sqlite3_column_type(stmt, 3) == SQLITE_NULL
+                        ? nil : String(cString: sqlite3_column_text(stmt, 3))
+                    let count = Int(sqlite3_column_int(stmt, 4))
+                    out.append(SessionInfo(id: id,
+                                           startedAt: Date(timeIntervalSince1970: started),
+                                           endedAt: ended,
+                                           deviceName: name,
+                                           sampleCount: count))
+                }
+            }
+            sqlite3_finalize(stmt)
+            return out
+        }
+    }
+
+    func session(id: String) -> SessionInfo? {
+        sessions().first { $0.id == id }
+    }
+
+    func totalSampleCount() -> Int {
+        scalarCount("SELECT COUNT(*) FROM samples;", bind: nil)
+    }
+
+    func sampleCount(sessionID: String) -> Int {
+        scalarCount("SELECT COUNT(*) FROM samples WHERE session_id = ?;", bind: sessionID)
+    }
+
+    // MARK: - Maintenance
+
+    func deleteSession(_ id: String) {
+        queue.async {
+            self.run("DELETE FROM samples WHERE session_id = ?;", text: id)
+            self.run("DELETE FROM sessions WHERE id = ?;", text: id)
+        }
+    }
+
+    func deleteAll() {
+        queue.async {
+            self.exec("DELETE FROM samples;")
+            self.exec("DELETE FROM sessions;")
+            self.exec("VACUUM;")
+        }
+    }
+
+    // MARK: - CSV export
+
+    /// Streams matching rows into a CSV file in the temp directory and returns
+    /// its URL. Pass `nil` to export every session.
+    func exportCSV(sessionID: String?) -> URL? {
+        queue.sync {
+            let stamp = ISO8601DateFormatter.compact.string(from: Date())
+            let name = sessionID.map { "HRM_\($0).csv" } ?? "HRM_all_\(stamp).csv"
+            let url = FileManager.default.temporaryDirectory.appendingPathComponent(name)
+
+            guard FileManager.default.createFile(atPath: url.path, contents: nil),
+                  let handle = try? FileHandle(forWritingTo: url) else { return nil }
+            defer { try? handle.close() }
+
+            handle.write(Data("timestamp_iso,unix_seconds,session_id,bpm,rr_ms,sensor_contact,energy_kj\n".utf8))
+
+            var stmt: OpaquePointer?
+            let sql: String
+            if sessionID == nil {
+                sql = "SELECT ts, session_id, bpm, rr_ms, contact, energy_kj FROM samples ORDER BY ts ASC;"
+            } else {
+                sql = "SELECT ts, session_id, bpm, rr_ms, contact, energy_kj FROM samples WHERE session_id = ? ORDER BY ts ASC;"
+            }
+            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return nil }
+            if let sid = sessionID {
+                sqlite3_bind_text(stmt, 1, sid, -1, SQLITE_TRANSIENT)
+            }
+
+            let iso = ISO8601DateFormatter()
+            iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+            var buffer = ""
+            while sqlite3_step(stmt) == SQLITE_ROW {
+                let ts = sqlite3_column_double(stmt, 0)
+                let sid = String(cString: sqlite3_column_text(stmt, 1))
+                let bpm = sqlite3_column_int(stmt, 2)
+                let rr = sqlite3_column_type(stmt, 3) == SQLITE_NULL
+                    ? "" : String(cString: sqlite3_column_text(stmt, 3))
+                let contact = sqlite3_column_type(stmt, 4) == SQLITE_NULL
+                    ? "" : String(sqlite3_column_int(stmt, 4))
+                let energy = sqlite3_column_type(stmt, 5) == SQLITE_NULL
+                    ? "" : String(sqlite3_column_int(stmt, 5))
+                let isoStr = iso.string(from: Date(timeIntervalSince1970: ts))
+                buffer += "\(isoStr),\(ts),\(sid),\(bpm),\(rr),\(contact),\(energy)\n"
+                if buffer.utf8.count > 64 * 1024 {
+                    handle.write(Data(buffer.utf8))
+                    buffer.removeAll(keepingCapacity: true)
+                }
+            }
+            if !buffer.isEmpty { handle.write(Data(buffer.utf8)) }
+            sqlite3_finalize(stmt)
+            return url
+        }
+    }
+
+    // MARK: - Private helpers (must be called on `queue`)
+
+    @discardableResult
+    private func exec(_ sql: String) -> Bool {
+        sqlite3_exec(db, sql, nil, nil, nil) == SQLITE_OK
+    }
+
+    private func run(_ sql: String, text: String) {
+        var stmt: OpaquePointer?
+        if sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK {
+            sqlite3_bind_text(stmt, 1, text, -1, SQLITE_TRANSIENT)
+            sqlite3_step(stmt)
+        }
+        sqlite3_finalize(stmt)
+    }
+
+    private func scalarCount(_ sql: String, bind: String?) -> Int {
+        queue.sync {
+            var stmt: OpaquePointer?
+            var value = 0
+            if sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK {
+                if let b = bind { sqlite3_bind_text(stmt, 1, b, -1, SQLITE_TRANSIENT) }
+                if sqlite3_step(stmt) == SQLITE_ROW { value = Int(sqlite3_column_int(stmt, 0)) }
+            }
+            sqlite3_finalize(stmt)
+            return value
+        }
+    }
+}
+
+extension ISO8601DateFormatter {
+    /// Filename-safe timestamp, e.g. `20260518T143012Z`.
+    static let compact: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withYear, .withMonth, .withDay,
+                           .withTime, .withTimeZone]
+        f.timeZone = TimeZone(identifier: "UTC")
+        return f
+    }()
+}

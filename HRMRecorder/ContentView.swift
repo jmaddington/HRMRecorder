@@ -1,0 +1,305 @@
+import SwiftUI
+
+struct ContentView: View {
+    @EnvironmentObject private var hr: HeartRateManager
+    @EnvironmentObject private var model: AppModel
+
+    @State private var sessions: [HRDatabase.SessionInfo] = []
+    @State private var shareURL: URL?
+    @State private var confirmClear = false
+    @State private var now = Date()
+    @State private var beat = false
+    @State private var showDevicePicker = false
+
+    private let tick = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
+
+    var body: some View {
+        NavigationStack {
+            List {
+                liveSection
+                deviceSection
+                recordSection
+                sessionsSection
+                exportSection
+            }
+            .navigationTitle("HRM Recorder")
+            .listStyle(.insetGrouped)
+        }
+        .onAppear(perform: reload)
+        .onReceive(tick) { now = $0 }
+        .onChange(of: hr.isRecording) { _ in reload() }
+        .sheet(item: $shareURL) { url in
+            ShareSheet(items: [url])
+        }
+        .sheet(isPresented: $showDevicePicker) {
+            DevicePickerView { device in
+                hr.select(device)
+                showDevicePicker = false
+            }
+            .environmentObject(hr)
+        }
+        .alert("Delete all recorded data?", isPresented: $confirmClear) {
+            Button("Delete Everything", role: .destructive) {
+                model.db.deleteAll()
+                reload()
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This permanently removes every session and sample from the database.")
+        }
+    }
+
+    // MARK: - Live heart rate
+
+    private var liveSection: some View {
+        Section {
+            VStack(spacing: 8) {
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    Image(systemName: "heart.fill")
+                        .foregroundStyle(.red)
+                        .scaleEffect(beat ? 1.18 : 1.0)
+                        .animation(hr.heartRate > 0
+                                   ? .easeInOut(duration: 0.45).repeatForever(autoreverses: true)
+                                   : .default,
+                                   value: beat)
+                        .onAppear { beat = true }
+                    Text(hr.heartRate > 0 ? "\(hr.heartRate)" : "—")
+                        .font(.system(size: 72, weight: .bold, design: .rounded))
+                        .monospacedDigit()
+                        .contentTransition(.numericText())
+                    Text("bpm").font(.title3).foregroundStyle(.secondary)
+                }
+                HStack(spacing: 6) {
+                    Circle()
+                        .fill(statusColor)
+                        .frame(width: 9, height: 9)
+                    Text(hr.state.label)
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
+                Text(hr.deviceName)
+                    .font(.footnote)
+                    .foregroundStyle(.tertiary)
+                if let c = hr.sensorContact {
+                    Label(c ? "Skin contact OK" : "Poor skin contact",
+                          systemImage: c ? "checkmark.circle" : "exclamationmark.triangle")
+                        .font(.caption)
+                        .foregroundStyle(c ? .green : .orange)
+                }
+                if !hr.rrIntervals.isEmpty {
+                    Text("RR: " + hr.rrIntervals.map { "\($0)" }.joined(separator: " ") + " ms")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                }
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 8)
+        }
+    }
+
+    // MARK: - Device selection
+
+    private var deviceSection: some View {
+        Section("Device") {
+            LabeledContent("Strap") {
+                Text(hr.state == .connected ? hr.deviceName : "Not selected")
+                    .foregroundStyle(hr.state == .connected ? .primary : .secondary)
+            }
+            Button {
+                hr.startDeviceScan()
+                showDevicePicker = true
+            } label: {
+                Label(hr.state == .connected ? "Change Device" : "Choose Device",
+                      systemImage: "sensor.tag.radiowaves.forward")
+            }
+            .disabled(hr.isRecording)
+            if hr.state == .connected || UserDefaults.standard.string(forKey: "preferredDeviceUUID") != nil {
+                Button(role: .destructive) {
+                    hr.forgetDevice()
+                } label: {
+                    Label("Forget Device", systemImage: "minus.circle")
+                }
+                .disabled(hr.isRecording)
+            }
+        }
+    }
+
+    // MARK: - Record toggle
+
+    private var recordSection: some View {
+        Section("Recording") {
+            Button {
+                hr.isRecording ? hr.stopRecording() : hr.startRecording()
+                reload()
+            } label: {
+                HStack {
+                    Image(systemName: hr.isRecording ? "stop.circle.fill" : "record.circle")
+                    Text(hr.isRecording ? "Stop Recording" : "Start Recording")
+                    Spacer()
+                }
+                .font(.headline)
+                .foregroundStyle(hr.isRecording ? .red : .accentColor)
+            }
+
+            if hr.isRecording {
+                LabeledContent("Elapsed", value: elapsedString)
+                LabeledContent("Samples saved", value: "\(hr.sessionSampleCount)")
+            }
+        }
+    }
+
+    // MARK: - Sessions
+
+    private var sessionsSection: some View {
+        Section("Sessions") {
+            if sessions.isEmpty {
+                Text("No sessions yet").foregroundStyle(.secondary)
+            }
+            ForEach(sessions) { s in
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(s.startedAt, format: .dateTime.year().month().day()
+                        .hour().minute().second())
+                        .font(.subheadline.weight(.medium))
+                    HStack(spacing: 10) {
+                        Label("\(s.sampleCount)", systemImage: "waveform.path.ecg")
+                        if let n = s.deviceName {
+                            Label(n, systemImage: "sensor.tag.radiowaves.forward")
+                        }
+                        if s.endedAt == nil {
+                            Text("active").foregroundStyle(.red)
+                        }
+                    }
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                }
+                .swipeActions(edge: .trailing) {
+                    Button(role: .destructive) {
+                        model.db.deleteSession(s.id)
+                        reload()
+                    } label: { Label("Delete", systemImage: "trash") }
+                    Button {
+                        shareURL = model.db.exportCSV(sessionID: s.id)
+                    } label: { Label("CSV", systemImage: "square.and.arrow.up") }
+                    .tint(.blue)
+                }
+            }
+        }
+    }
+
+    // MARK: - Export & maintenance
+
+    private var exportSection: some View {
+        Section {
+            Button {
+                shareURL = model.db.exportCSV(sessionID: nil)
+            } label: {
+                Label("Export All as CSV", systemImage: "square.and.arrow.up")
+            }
+            Button(role: .destructive) {
+                confirmClear = true
+            } label: {
+                Label("Delete All Data", systemImage: "trash")
+            }
+        } footer: {
+            Text("Database: \(model.db.fileURL.path)")
+                .font(.caption2)
+        }
+    }
+
+    // MARK: - Helpers
+
+    private var statusColor: Color {
+        switch hr.state {
+        case .connected:   return .green
+        case .scanning,
+             .connecting:  return .orange
+        default:           return .red
+        }
+    }
+
+    private var elapsedString: String {
+        guard let start = hr.sessionStartedAt else { return "0:00" }
+        let s = Int(now.timeIntervalSince(start))
+        return String(format: "%d:%02d:%02d", s / 3600, (s % 3600) / 60, s % 60)
+    }
+
+    private func reload() {
+        sessions = model.db.sessions()
+    }
+}
+
+/// Bridges `UIActivityViewController` so CSV files can be shared/saved anywhere.
+struct ShareSheet: UIViewControllerRepresentable {
+    let items: [Any]
+    func makeUIViewController(context: Context) -> UIActivityViewController {
+        UIActivityViewController(activityItems: items, applicationActivities: nil)
+    }
+    func updateUIViewController(_ controller: UIActivityViewController, context: Context) {}
+}
+
+/// Live list of nearby heart-rate straps; tap one to connect and remember it.
+struct DevicePickerView: View {
+    @EnvironmentObject private var hr: HeartRateManager
+    @Environment(\.dismiss) private var dismiss
+    let onSelect: (HeartRateManager.Device) -> Void
+
+    var body: some View {
+        NavigationStack {
+            List {
+                Section {
+                    if hr.discoveredDevices.isEmpty {
+                        HStack(spacing: 10) {
+                            ProgressView()
+                            Text("Searching for heart-rate straps…")
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    ForEach(hr.discoveredDevices) { device in
+                        Button {
+                            onSelect(device)
+                        } label: {
+                            HStack {
+                                Image(systemName: "sensor.tag.radiowaves.forward")
+                                    .foregroundStyle(.tint)
+                                Text(device.name)
+                                    .foregroundStyle(.primary)
+                                Spacer()
+                                Image(systemName: signalIcon(device.rssi))
+                                    .foregroundStyle(.secondary)
+                                Text("\(device.rssi) dBm")
+                                    .font(.caption2.monospacedDigit())
+                                    .foregroundStyle(.tertiary)
+                            }
+                        }
+                    }
+                } footer: {
+                    Text("Wear the strap with moistened electrodes so it starts advertising. The HRM-Pro+ allows only one Bluetooth connection at a time — disconnect it from Garmin Connect or other devices first.")
+                }
+            }
+            .navigationTitle("Choose Device")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+                ToolbarItem(placement: .primaryAction) {
+                    Button { hr.startDeviceScan() } label: {
+                        Label("Rescan", systemImage: "arrow.clockwise")
+                    }
+                }
+            }
+        }
+    }
+
+    private func signalIcon(_ rssi: Int) -> String {
+        switch rssi {
+        case ..<(-85):  return "wifi.slash"
+        case ..<(-70):  return "wifi.exclamationmark"
+        default:        return "wifi"
+        }
+    }
+}
+
+extension URL: Identifiable {
+    public var id: String { absoluteString }
+}
