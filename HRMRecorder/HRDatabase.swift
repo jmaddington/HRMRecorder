@@ -336,6 +336,167 @@ final class HRDatabase {
         scalarCount("SELECT COUNT(*) FROM samples WHERE session_id = ?;", bind: sessionID)
     }
 
+    // MARK: - Upload (read-only, bounded — Server Sync Protocol v1)
+
+    // AIDEV-NOTE: These feed SyncUploader (ju3.4). All `queue.sync` and all
+    // bounded — the fire-and-forget insert hot path above is untouched.
+    // Field names/shapes mirror SYNC_PROTOCOL.md §6 (epoch-seconds `ts`,
+    // verbatim `rr_ms`, nullable strap identity). client_* are the app's
+    // own natural keys; the server assigns its own PKs.
+
+    struct DeviceRow {
+        let clientDeviceID: String
+        let name: String?
+        let manufacturer: String?
+        let model: String?
+        let firmware: String?
+        let bodyLocation: String?
+        let firstSeen: Double          // epoch seconds
+    }
+
+    struct SessionRow {
+        let clientSessionID: String
+        let startedAt: Double          // epoch seconds
+        let endedAt: Double?           // nil while recording
+        let deviceName: String?
+        let manufacturer: String?
+        let model: String?
+        let firmware: String?
+        let bodyLocation: String?
+    }
+
+    struct SampleRow {
+        let clientSampleID: Int        // samples.id (the sync cursor)
+        let clientSessionID: String
+        let clientDeviceID: String?
+        let ts: Double                 // epoch seconds, sub-second kept
+        let bpm: Int
+        let rrMs: String?              // verbatim "812;806"
+        let contact: Int?              // 1 / 0 / nil
+        let energyKJ: Int?
+    }
+
+    /// Highest `samples.id` durably stored, or 0 when empty — the upper
+    /// bound the uploader's cursor can ever reach for this install.
+    func maxSampleID() -> Int {
+        queue.sync {
+            var stmt: OpaquePointer?
+            var value = 0
+            if sqlite3_prepare_v2(db, "SELECT IFNULL(MAX(id), 0) FROM samples;",
+                                   -1, &stmt, nil) == SQLITE_OK,
+               sqlite3_step(stmt) == SQLITE_ROW {
+                value = Int(sqlite3_column_int64(stmt, 0))
+            }
+            sqlite3_finalize(stmt)
+            return value
+        }
+    }
+
+    /// One bounded page of samples with `id > afterID`, ascending, capped at
+    /// `limit` (the uploader passes ≤ the server batch cap so memory stays
+    /// bounded — nothing is buffered beyond one page).
+    func samplesForUpload(afterID: Int, limit: Int) -> [SampleRow] {
+        queue.sync {
+            var out: [SampleRow] = []
+            out.reserveCapacity(min(limit, 1024))
+            var stmt: OpaquePointer?
+            let sql = """
+                SELECT id, session_id, ts, bpm, rr_ms, contact, energy_kj, device_id
+                FROM samples WHERE id > ? ORDER BY id LIMIT ?;
+                """
+            if sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK {
+                sqlite3_bind_int64(stmt, 1, sqlite3_int64(afterID))
+                sqlite3_bind_int(stmt, 2, Int32(max(0, limit)))
+                let textOrNil: (Int32) -> String? = { col in
+                    sqlite3_column_type(stmt, col) == SQLITE_NULL
+                        ? nil : String(cString: sqlite3_column_text(stmt, col))
+                }
+                let intOrNil: (Int32) -> Int? = { col in
+                    sqlite3_column_type(stmt, col) == SQLITE_NULL
+                        ? nil : Int(sqlite3_column_int(stmt, col))
+                }
+                while sqlite3_step(stmt) == SQLITE_ROW {
+                    out.append(SampleRow(
+                        clientSampleID: Int(sqlite3_column_int64(stmt, 0)),
+                        clientSessionID: String(cString: sqlite3_column_text(stmt, 1)),
+                        clientDeviceID: textOrNil(7),
+                        ts: sqlite3_column_double(stmt, 2),
+                        bpm: Int(sqlite3_column_int(stmt, 3)),
+                        rrMs: textOrNil(4),
+                        contact: intOrNil(5),
+                        energyKJ: intOrNil(6)))
+                }
+            }
+            sqlite3_finalize(stmt)
+            return out
+        }
+    }
+
+    /// Every session (bounded by recording count, not sample volume). The
+    /// uploader posts these whole — they are small and idempotent.
+    func sessionsForUpload() -> [SessionRow] {
+        queue.sync {
+            var out: [SessionRow] = []
+            var stmt: OpaquePointer?
+            let sql = """
+                SELECT id, started_at, ended_at, device_name,
+                       manufacturer, model, firmware, body_location
+                FROM sessions ORDER BY started_at;
+                """
+            if sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK {
+                let textOrNil: (Int32) -> String? = { col in
+                    sqlite3_column_type(stmt, col) == SQLITE_NULL
+                        ? nil : String(cString: sqlite3_column_text(stmt, col))
+                }
+                while sqlite3_step(stmt) == SQLITE_ROW {
+                    out.append(SessionRow(
+                        clientSessionID: String(cString: sqlite3_column_text(stmt, 0)),
+                        startedAt: sqlite3_column_double(stmt, 1),
+                        endedAt: sqlite3_column_type(stmt, 2) == SQLITE_NULL
+                            ? nil : sqlite3_column_double(stmt, 2),
+                        deviceName: textOrNil(3),
+                        manufacturer: textOrNil(4),
+                        model: textOrNil(5),
+                        firmware: textOrNil(6),
+                        bodyLocation: textOrNil(7)))
+                }
+            }
+            sqlite3_finalize(stmt)
+            return out
+        }
+    }
+
+    /// Every known physical strap (bounded by strap count).
+    func devicesForUpload() -> [DeviceRow] {
+        queue.sync {
+            var out: [DeviceRow] = []
+            var stmt: OpaquePointer?
+            let sql = """
+                SELECT id, name, manufacturer, model, firmware,
+                       body_location, first_seen
+                FROM devices ORDER BY first_seen;
+                """
+            if sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK {
+                let textOrNil: (Int32) -> String? = { col in
+                    sqlite3_column_type(stmt, col) == SQLITE_NULL
+                        ? nil : String(cString: sqlite3_column_text(stmt, col))
+                }
+                while sqlite3_step(stmt) == SQLITE_ROW {
+                    out.append(DeviceRow(
+                        clientDeviceID: String(cString: sqlite3_column_text(stmt, 0)),
+                        name: textOrNil(1),
+                        manufacturer: textOrNil(2),
+                        model: textOrNil(3),
+                        firmware: textOrNil(4),
+                        bodyLocation: textOrNil(5),
+                        firstSeen: sqlite3_column_double(stmt, 6)))
+                }
+            }
+            sqlite3_finalize(stmt)
+            return out
+        }
+    }
+
     // MARK: - Maintenance
 
     func deleteSession(_ id: String) {
