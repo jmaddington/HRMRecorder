@@ -28,6 +28,8 @@
 	<true/>
 	<key>NSBluetoothAlwaysUsageDescription</key>
 	<string>HRM Recorder connects to your Bluetooth heart-rate strap (e.g. Garmin HRM-Pro+) to read and record heart rate.</string>
+	<key>NSSupportsLiveActivities</key>
+	<true/>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

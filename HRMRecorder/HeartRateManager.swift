@@ -82,6 +82,16 @@ final class HeartRateManager: NSObject, ObservableObject {
     private var peripheral: CBPeripheral?
     private var sessionID: String?
 
+    /// Lock-screen / Dynamic Island Live Activity, alive only while recording.
+    /// Best-effort glanceable UI — its failures never affect capture.
+    private let liveActivity = LiveActivityController()
+
+    /// A presentable strap name for the Live Activity (`deviceName` is "—"
+    /// until a strap connects, e.g. during an early session resume).
+    private var liveActivityDeviceName: String {
+        deviceName == "—" ? "Heart-Rate Strap" : deviceName
+    }
+
     /// Strong references to peripherals seen while scanning; CoreBluetooth
     /// releases any peripheral we don't retain, which would break `select`.
     private var seen: [UUID: CBPeripheral] = [:]
@@ -124,6 +134,11 @@ final class HeartRateManager: NSObject, ObservableObject {
         sessionStartedAt = Date()
         isRecording = true
         persistDeviceInfo()                               // capture identity if already connected
+        if #available(iOS 16.2, *) {
+            liveActivity.start(deviceName: liveActivityDeviceName,
+                               sessionStartedAt: sessionStartedAt ?? Date(),
+                               bpm: heartRate, contact: sensorContact)
+        }
         UIApplication.shared.isIdleTimerDisabled = true   // keep screen awake in foreground
     }
 
@@ -132,6 +147,7 @@ final class HeartRateManager: NSObject, ObservableObject {
         db.endSession(id)
         UserDefaults.standard.removeObject(forKey: activeSessionKey)
         isRecording = false
+        if #available(iOS 16.2, *) { liveActivity.end() }
         sessionID = nil
         sessionStartedAt = nil
         UIApplication.shared.isIdleTimerDisabled = false
@@ -149,6 +165,11 @@ final class HeartRateManager: NSObject, ObservableObject {
         isRecording = true
         sessionStartedAt = s.startedAt
         sessionSampleCount = s.sampleCount
+        if #available(iOS 16.2, *) {
+            liveActivity.adopt(deviceName: liveActivityDeviceName,
+                               sessionStartedAt: s.startedAt,
+                               bpm: heartRate, contact: sensorContact)
+        }
         UIApplication.shared.isIdleTimerDisabled = true
     }
 
@@ -449,6 +470,9 @@ extension HeartRateManager: CBPeripheralDelegate {
             db.insertSample(sessionID: id, date: now, bpm: bpm,
                             rr: rr, contact: contact, energyKJ: energy)
             sessionSampleCount += 1
+            if #available(iOS 16.2, *) {
+                liveActivity.update(bpm: bpm, contact: contact, now: now)
+            }
         }
     }
 }
