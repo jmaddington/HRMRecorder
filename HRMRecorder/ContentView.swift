@@ -23,6 +23,11 @@ struct ContentView: View {
                     } label: {
                         Label("Sessions", systemImage: "list.bullet.rectangle")
                     }
+                } footer: {
+                    Text(Self.versionString)
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                        .frame(maxWidth: .infinity, alignment: .center)
                 }
             }
             .navigationTitle("HRM Recorder")
@@ -148,6 +153,15 @@ struct ContentView: View {
     }
 
     // MARK: - Helpers
+
+    /// Marketing version + build, read from the bundle so it always reflects
+    /// the shipped `MARKETING_VERSION` / `CURRENT_PROJECT_VERSION`.
+    private static var versionString: String {
+        let info = Bundle.main.infoDictionary
+        let v = info?["CFBundleShortVersionString"] as? String ?? "?"
+        let b = info?["CFBundleVersion"] as? String ?? "?"
+        return "Version \(v) (\(b))"
+    }
 
     private var statusColor: Color {
         switch hr.state {
