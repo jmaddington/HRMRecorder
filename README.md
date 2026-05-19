@@ -40,11 +40,17 @@ SQLite file: `Application Support/hrm.sqlite3` (path shown at the bottom of
 the app, WAL mode for durable real-time writes).
 
 ```
-sessions(id TEXT pk, started_at REAL, ended_at REAL, device_name TEXT)
+sessions(id TEXT pk, started_at REAL, ended_at REAL, device_name TEXT,
+         manufacturer TEXT, model TEXT, firmware TEXT, body_location TEXT)
 samples (id INTEGER pk, session_id TEXT, ts REAL, bpm INTEGER,
          rr_ms TEXT, contact INTEGER, energy_kj INTEGER)
 ```
 
+- `device_name` — BLE advertised name. `manufacturer` / `model` / `firmware`
+  are read from the standard Device Information Service (0x180A);
+  `body_location` from Body Sensor Location (0x2A38), e.g. Garmin / HRM-Pro+ /
+  Chest. These are recorded per session (sensor identity is constant for a
+  session) and may be NULL if the strap doesn't expose them.
 - `ts` — Unix epoch seconds (sub-second precision).
 - `rr_ms` — R-R intervals for the packet, `;`-separated, milliseconds (empty
   if the strap didn't send them).
@@ -57,8 +63,11 @@ samples (id INTEGER pk, session_id TEXT, ts REAL, bpm INTEGER,
 opens in the iOS share sheet (save to Files, AirDrop, email, etc.). Columns:
 
 ```
-timestamp_iso,unix_seconds,session_id,bpm,rr_ms,sensor_contact,energy_kj
+timestamp_iso,unix_seconds,session_id,device_name,manufacturer,model,firmware,body_location,bpm,rr_ms,sensor_contact,energy_kj
 ```
+
+Sensor identity columns are denormalized onto every row (joined from the
+session) so each CSV is self-describing; text fields are RFC-4180 quoted.
 
 ## Project layout
 

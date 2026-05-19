@@ -105,6 +105,12 @@ struct ContentView: View {
                 Text(hr.state == .connected ? hr.deviceName : "Not selected")
                     .foregroundStyle(hr.state == .connected ? .primary : .secondary)
             }
+            if let summary = hr.sensorSummary {
+                LabeledContent("Sensor", value: summary)
+            }
+            if let fw = hr.firmware {
+                LabeledContent("Firmware", value: fw)
+            }
             Button {
                 hr.startDeviceScan()
                 showDevicePicker = true
@@ -162,8 +168,8 @@ struct ContentView: View {
                         .font(.subheadline.weight(.medium))
                     HStack(spacing: 10) {
                         Label("\(s.sampleCount)", systemImage: "waveform.path.ecg")
-                        if let n = s.deviceName {
-                            Label(n, systemImage: "sensor.tag.radiowaves.forward")
+                        if let sensor = sessionSensorLabel(s) {
+                            Label(sensor, systemImage: "sensor.tag.radiowaves.forward")
                         }
                         if s.endedAt == nil {
                             Text("active").foregroundStyle(.red)
@@ -221,6 +227,15 @@ struct ContentView: View {
         guard let start = hr.sessionStartedAt else { return "0:00" }
         let s = Int(now.timeIntervalSince(start))
         return String(format: "%d:%02d:%02d", s / 3600, (s % 3600) / 60, s % 60)
+    }
+
+    /// Prefer recorded sensor model over the advertised BLE name.
+    private func sessionSensorLabel(_ s: HRDatabase.SessionInfo) -> String? {
+        let identity = [s.manufacturer, s.model].compactMap { $0 }.joined(separator: " ")
+        if !identity.isEmpty {
+            return s.bodyLocation.map { "\(identity) (\($0))" } ?? identity
+        }
+        return s.deviceName
     }
 
     private func reload() {

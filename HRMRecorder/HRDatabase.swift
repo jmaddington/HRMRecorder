@@ -17,6 +17,10 @@ final class HRDatabase {
         let startedAt: Date
         let endedAt: Date?
         let deviceName: String?
+        let manufacturer: String?
+        let model: String?
+        let firmware: String?
+        let bodyLocation: String?
         let sampleCount: Int
     }
 
@@ -43,12 +47,21 @@ final class HRDatabase {
             exec("PRAGMA synchronous = NORMAL;")
             exec("""
                 CREATE TABLE IF NOT EXISTS sessions (
-                    id          TEXT PRIMARY KEY,
-                    started_at  REAL NOT NULL,
-                    ended_at    REAL,
-                    device_name TEXT
+                    id            TEXT PRIMARY KEY,
+                    started_at    REAL NOT NULL,
+                    ended_at      REAL,
+                    device_name   TEXT,
+                    manufacturer  TEXT,
+                    model         TEXT,
+                    firmware      TEXT,
+                    body_location TEXT
                 );
                 """)
+            // Migrate older databases that predate the device-info columns.
+            for col in ["manufacturer", "model", "firmware", "body_location"]
+            where !columnExists("sessions", col) {
+                exec("ALTER TABLE sessions ADD COLUMN \(col) TEXT;")
+            }
             exec("""
                 CREATE TABLE IF NOT EXISTS samples (
                     id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -115,6 +128,44 @@ final class HRDatabase {
         }
     }
 
+    /// Attach sensor identity to a session. Device Information characteristics
+    /// arrive asynchronously after connect, so this may be called repeatedly
+    /// with partial data — COALESCE keeps the first non-null value for each
+    /// field rather than clobbering it.
+    func setSessionDevice(sessionID: String,
+                          manufacturer: String?,
+                          model: String?,
+                          firmware: String?,
+                          bodyLocation: String?) {
+        queue.async {
+            var stmt: OpaquePointer?
+            let sql = """
+                UPDATE sessions SET
+                    manufacturer  = COALESCE(?, manufacturer),
+                    model         = COALESCE(?, model),
+                    firmware      = COALESCE(?, firmware),
+                    body_location = COALESCE(?, body_location)
+                WHERE id = ?;
+                """
+            if sqlite3_prepare_v2(self.db, sql, -1, &stmt, nil) == SQLITE_OK {
+                let bind: (Int32, String?) -> Void = { idx, value in
+                    if let v = value {
+                        sqlite3_bind_text(stmt, idx, v, -1, SQLITE_TRANSIENT)
+                    } else {
+                        sqlite3_bind_null(stmt, idx)
+                    }
+                }
+                bind(1, manufacturer)
+                bind(2, model)
+                bind(3, firmware)
+                bind(4, bodyLocation)
+                sqlite3_bind_text(stmt, 5, sessionID, -1, SQLITE_TRANSIENT)
+                sqlite3_step(stmt)
+            }
+            sqlite3_finalize(stmt)
+        }
+    }
+
     // MARK: - Samples (hot path — fire and forget on the serial queue)
 
     func insertSample(sessionID: String,
@@ -158,24 +209,30 @@ final class HRDatabase {
             var stmt: OpaquePointer?
             let sql = """
                 SELECT s.id, s.started_at, s.ended_at, s.device_name,
+                       s.manufacturer, s.model, s.firmware, s.body_location,
                        (SELECT COUNT(*) FROM samples x WHERE x.session_id = s.id)
                 FROM sessions s
                 ORDER BY s.started_at DESC;
                 """
             if sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK {
+                let textOrNil: (Int32) -> String? = { col in
+                    sqlite3_column_type(stmt, col) == SQLITE_NULL
+                        ? nil : String(cString: sqlite3_column_text(stmt, col))
+                }
                 while sqlite3_step(stmt) == SQLITE_ROW {
                     let id = String(cString: sqlite3_column_text(stmt, 0))
                     let started = sqlite3_column_double(stmt, 1)
                     let ended: Date? = sqlite3_column_type(stmt, 2) == SQLITE_NULL
                         ? nil : Date(timeIntervalSince1970: sqlite3_column_double(stmt, 2))
-                    let name: String? = sqlite3_column_type(stmt, 3) == SQLITE_NULL
-                        ? nil : String(cString: sqlite3_column_text(stmt, 3))
-                    let count = Int(sqlite3_column_int(stmt, 4))
                     out.append(SessionInfo(id: id,
                                            startedAt: Date(timeIntervalSince1970: started),
                                            endedAt: ended,
-                                           deviceName: name,
-                                           sampleCount: count))
+                                           deviceName: textOrNil(3),
+                                           manufacturer: textOrNil(4),
+                                           model: textOrNil(5),
+                                           firmware: textOrNil(6),
+                                           bodyLocation: textOrNil(7),
+                                           sampleCount: Int(sqlite3_column_int(stmt, 8))))
                 }
             }
             sqlite3_finalize(stmt)
@@ -226,14 +283,18 @@ final class HRDatabase {
                   let handle = try? FileHandle(forWritingTo: url) else { return nil }
             defer { try? handle.close() }
 
-            handle.write(Data("timestamp_iso,unix_seconds,session_id,bpm,rr_ms,sensor_contact,energy_kj\n".utf8))
+            handle.write(Data("timestamp_iso,unix_seconds,session_id,device_name,manufacturer,model,firmware,body_location,bpm,rr_ms,sensor_contact,energy_kj\n".utf8))
 
             var stmt: OpaquePointer?
+            let cols = """
+                s.ts, s.session_id, e.device_name, e.manufacturer, e.model,
+                e.firmware, e.body_location, s.bpm, s.rr_ms, s.contact, s.energy_kj
+                """
             let sql: String
             if sessionID == nil {
-                sql = "SELECT ts, session_id, bpm, rr_ms, contact, energy_kj FROM samples ORDER BY ts ASC;"
+                sql = "SELECT \(cols) FROM samples s LEFT JOIN sessions e ON e.id = s.session_id ORDER BY s.ts ASC;"
             } else {
-                sql = "SELECT ts, session_id, bpm, rr_ms, contact, energy_kj FROM samples WHERE session_id = ? ORDER BY ts ASC;"
+                sql = "SELECT \(cols) FROM samples s LEFT JOIN sessions e ON e.id = s.session_id WHERE s.session_id = ? ORDER BY s.ts ASC;"
             }
             guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return nil }
             if let sid = sessionID {
@@ -242,19 +303,28 @@ final class HRDatabase {
 
             let iso = ISO8601DateFormatter()
             iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+            let field: (Int32) -> String = { col in
+                sqlite3_column_type(stmt, col) == SQLITE_NULL
+                    ? "" : Self.csvEscape(String(cString: sqlite3_column_text(stmt, col)))
+            }
             var buffer = ""
             while sqlite3_step(stmt) == SQLITE_ROW {
                 let ts = sqlite3_column_double(stmt, 0)
-                let sid = String(cString: sqlite3_column_text(stmt, 1))
-                let bpm = sqlite3_column_int(stmt, 2)
-                let rr = sqlite3_column_type(stmt, 3) == SQLITE_NULL
-                    ? "" : String(cString: sqlite3_column_text(stmt, 3))
-                let contact = sqlite3_column_type(stmt, 4) == SQLITE_NULL
-                    ? "" : String(sqlite3_column_int(stmt, 4))
-                let energy = sqlite3_column_type(stmt, 5) == SQLITE_NULL
-                    ? "" : String(sqlite3_column_int(stmt, 5))
+                let sid = field(1)
+                let deviceName = field(2)
+                let manufacturer = field(3)
+                let model = field(4)
+                let firmware = field(5)
+                let bodyLoc = field(6)
+                let bpm = sqlite3_column_int(stmt, 7)
+                let rr = sqlite3_column_type(stmt, 8) == SQLITE_NULL
+                    ? "" : String(cString: sqlite3_column_text(stmt, 8))
+                let contact = sqlite3_column_type(stmt, 9) == SQLITE_NULL
+                    ? "" : String(sqlite3_column_int(stmt, 9))
+                let energy = sqlite3_column_type(stmt, 10) == SQLITE_NULL
+                    ? "" : String(sqlite3_column_int(stmt, 10))
                 let isoStr = iso.string(from: Date(timeIntervalSince1970: ts))
-                buffer += "\(isoStr),\(ts),\(sid),\(bpm),\(rr),\(contact),\(energy)\n"
+                buffer += "\(isoStr),\(ts),\(sid),\(deviceName),\(manufacturer),\(model),\(firmware),\(bodyLoc),\(bpm),\(rr),\(contact),\(energy)\n"
                 if buffer.utf8.count > 64 * 1024 {
                     handle.write(Data(buffer.utf8))
                     buffer.removeAll(keepingCapacity: true)
@@ -271,6 +341,26 @@ final class HRDatabase {
     @discardableResult
     private func exec(_ sql: String) -> Bool {
         sqlite3_exec(db, sql, nil, nil, nil) == SQLITE_OK
+    }
+
+    /// RFC-4180 quoting so a manufacturer/model containing a comma, quote, or
+    /// newline can't break the CSV layout.
+    private static func csvEscape(_ s: String) -> String {
+        guard s.contains(where: { $0 == "," || $0 == "\"" || $0 == "\n" || $0 == "\r" })
+        else { return s }
+        return "\"" + s.replacingOccurrences(of: "\"", with: "\"\"") + "\""
+    }
+
+    private func columnExists(_ table: String, _ column: String) -> Bool {
+        var stmt: OpaquePointer?
+        var found = false
+        if sqlite3_prepare_v2(db, "PRAGMA table_info(\(table));", -1, &stmt, nil) == SQLITE_OK {
+            while sqlite3_step(stmt) == SQLITE_ROW {
+                if String(cString: sqlite3_column_text(stmt, 1)) == column { found = true }
+            }
+        }
+        sqlite3_finalize(stmt)
+        return found
     }
 
     private func run(_ sql: String, text: String) {

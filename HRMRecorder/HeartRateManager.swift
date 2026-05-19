@@ -56,6 +56,20 @@ final class HeartRateManager: NSObject, ObservableObject {
     @Published private(set) var energyKJ: Int?
     @Published private(set) var lastUpdate: Date?
 
+    /// Sensor identity, read from the Device Information Service (0x180A) and
+    /// the HR service's Body Sensor Location characteristic on connect.
+    @Published private(set) var manufacturer: String?
+    @Published private(set) var model: String?
+    @Published private(set) var firmware: String?
+    @Published private(set) var bodyLocation: String?
+
+    /// Human-readable sensor summary, e.g. "Garmin HRM-Pro+ · Chest".
+    var sensorSummary: String? {
+        let parts = [[manufacturer, model].compactMap { $0 }.joined(separator: " "),
+                     bodyLocation].compactMap { $0 }.filter { !$0.isEmpty }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    }
+
     /// Live results of an in-progress device scan (sorted strongest signal first).
     @Published private(set) var discoveredDevices: [Device] = []
 
@@ -77,6 +91,11 @@ final class HeartRateManager: NSObject, ObservableObject {
 
     private let hrService = CBUUID(string: "180D")
     private let hrMeasurement = CBUUID(string: "2A37")
+    private let bodySensorLocation = CBUUID(string: "2A38")
+    private let disService = CBUUID(string: "180A")
+    private let cManufacturer = CBUUID(string: "2A29")
+    private let cModel = CBUUID(string: "2A24")
+    private let cFirmware = CBUUID(string: "2A26")
     private let preferredDeviceKey = "preferredDeviceUUID"
     private let activeSessionKey = "activeSessionID"
 
@@ -104,6 +123,7 @@ final class HeartRateManager: NSObject, ObservableObject {
         sessionSampleCount = 0
         sessionStartedAt = Date()
         isRecording = true
+        persistDeviceInfo()                               // capture identity if already connected
         UIApplication.shared.isIdleTimerDisabled = true   // keep screen awake in foreground
     }
 
@@ -202,8 +222,24 @@ final class HeartRateManager: NSObject, ObservableObject {
         peripheral = p
         p.delegate = self
         deviceName = p.name ?? "Heart-Rate Strap"
+        manufacturer = nil          // clear stale identity until re-read
+        model = nil
+        firmware = nil
+        bodyLocation = nil
         state = .connecting
         central.connect(p, options: nil)
+    }
+
+    /// Write whatever sensor identity we currently know onto the active
+    /// session. Safe to call repeatedly — partial reads accumulate via
+    /// COALESCE in the DB layer.
+    private func persistDeviceInfo() {
+        guard let id = sessionID else { return }
+        db.setSessionDevice(sessionID: id,
+                            manufacturer: manufacturer,
+                            model: model,
+                            firmware: firmware,
+                            bodyLocation: bodyLocation)
     }
 }
 
@@ -262,7 +298,7 @@ extension HeartRateManager: CBCentralManagerDelegate {
 
     func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) {
         deviceName = peripheral.name ?? "Heart-Rate Strap"
-        peripheral.discoverServices([hrService])
+        peripheral.discoverServices([hrService, disService])
     }
 
     func centralManager(_ central: CBCentralManager,
@@ -291,28 +327,80 @@ extension HeartRateManager: CBCentralManagerDelegate {
 extension HeartRateManager: CBPeripheralDelegate {
 
     func peripheral(_ peripheral: CBPeripheral, didDiscoverServices error: Error?) {
-        guard let service = peripheral.services?.first(where: { $0.uuid == hrService }) else {
+        guard let services = peripheral.services else {
             state = .disconnected
             return
         }
-        peripheral.discoverCharacteristics([hrMeasurement], for: service)
+        for service in services {
+            switch service.uuid {
+            case hrService:
+                peripheral.discoverCharacteristics([hrMeasurement, bodySensorLocation],
+                                                   for: service)
+            case disService:
+                peripheral.discoverCharacteristics([cManufacturer, cModel, cFirmware],
+                                                   for: service)
+            default:
+                break
+            }
+        }
+        if !services.contains(where: { $0.uuid == hrService }) { state = .disconnected }
     }
 
     func peripheral(_ peripheral: CBPeripheral,
                     didDiscoverCharacteristicsFor service: CBService,
                     error: Error?) {
-        guard let ch = service.characteristics?.first(where: { $0.uuid == hrMeasurement })
-        else { return }
-        peripheral.setNotifyValue(true, for: ch)
-        state = .connected
+        for ch in service.characteristics ?? [] {
+            switch ch.uuid {
+            case hrMeasurement:
+                peripheral.setNotifyValue(true, for: ch)
+                state = .connected
+            case bodySensorLocation, cManufacturer, cModel, cFirmware:
+                peripheral.readValue(for: ch)   // one-shot reads, identity is static
+            default:
+                break
+            }
+        }
     }
 
     func peripheral(_ peripheral: CBPeripheral,
                     didUpdateValueFor characteristic: CBCharacteristic,
                     error: Error?) {
-        guard characteristic.uuid == hrMeasurement,
-              let data = characteristic.value else { return }
-        ingest(data)
+        guard let data = characteristic.value else { return }
+        switch characteristic.uuid {
+        case hrMeasurement:
+            ingest(data)
+        case cManufacturer:
+            manufacturer = decodeString(data); persistDeviceInfo()
+        case cModel:
+            model = decodeString(data); persistDeviceInfo()
+        case cFirmware:
+            firmware = decodeString(data); persistDeviceInfo()
+        case bodySensorLocation:
+            bodyLocation = Self.bodyLocationName(data.first); persistDeviceInfo()
+        default:
+            break
+        }
+    }
+
+    private func decodeString(_ data: Data) -> String? {
+        let s = String(decoding: data, as: UTF8.self)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .trimmingCharacters(in: CharacterSet(charactersIn: "\0"))
+        return s.isEmpty ? nil : s
+    }
+
+    /// Body Sensor Location characteristic (GATT 0x2A38) enumeration.
+    private static func bodyLocationName(_ code: UInt8?) -> String? {
+        switch code {
+        case 0: return "Other"
+        case 1: return "Chest"
+        case 2: return "Wrist"
+        case 3: return "Finger"
+        case 4: return "Hand"
+        case 5: return "Ear Lobe"
+        case 6: return "Foot"
+        default: return nil
+        }
     }
 
     /// Parse a Heart Rate Measurement packet (Bluetooth GATT 0x2A37).

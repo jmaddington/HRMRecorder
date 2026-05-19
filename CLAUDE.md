@@ -35,7 +35,8 @@ DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
 ## Project format gotchas
 
 - The `.xcodeproj` uses an Xcode 16+ **file-system-synchronized root group**
-  (`PBXFileSystemSynchronizedRootGroup`, `objectVersion = 77`). New `.swift`
+  (`PBXFileSystemSynchronizedRootGroup`; `objectVersion` is `70` after Xcode
+  rewrote the original `77` — both support synchronized groups). New `.swift`
   files dropped into `HRMRecorder/` are picked up automatically — **do not**
   hand-edit `project.pbxproj` to register sources.
 - `Info.plist` lives inside the synced folder, so it is excluded from Copy
@@ -86,6 +87,15 @@ saved strap it scans and publishes `discoveredDevices` for the user to pick
 (`DevicePickerView`); `select(_:)` connects and persists the chosen UUID under
 `preferredDeviceUUID`. Discovered `CBPeripheral`s must stay retained in `seen`
 or CoreBluetooth releases them and `select` breaks.
+
+**Sensor identity:** on connect, the manager also discovers the Device
+Information Service (`0x180A` → manufacturer/model/firmware) and Body Sensor
+Location (`0x2A38`). These reads complete asynchronously *after* connect and
+possibly after recording starts, so `persistDeviceInfo()` is called both when a
+session starts and on each characteristic read; `HRDatabase.setSessionDevice`
+uses `COALESCE` so partial/late reads accumulate without clobbering. Identity
+is stored once per `sessions` row (constant per session) and denormalized onto
+every CSV row via a `LEFT JOIN`.
 
 **Connection lifecycle / staying alive in the background — three layers:**
 1. `bluetooth-central` background mode (Info.plist) keeps notifications
