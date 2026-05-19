@@ -188,6 +188,9 @@ struct SessionsView: View {
     @State private var sessions: [HRDatabase.SessionInfo] = []
     @State private var shareURL: URL?
     @State private var confirmClear = false
+    @State private var limitRange = false
+    @State private var rangeStart = Calendar.current.date(byAdding: .day, value: -7, to: Date()) ?? Date()
+    @State private var rangeEnd = Date()
 
     var body: some View {
         List {
@@ -226,11 +229,38 @@ struct SessionsView: View {
             }
 
             Section {
-                Button {
-                    shareURL = model.db.exportCSV(sessionID: nil)
-                } label: {
-                    Label("Export All as CSV", systemImage: "square.and.arrow.up")
+                Toggle("Limit to date range", isOn: $limitRange.animation())
+                if limitRange {
+                    DatePicker("From", selection: $rangeStart,
+                               displayedComponents: .date)
+                    DatePicker("To", selection: $rangeEnd,
+                               displayedComponents: .date)
+                    if !rangeValid {
+                        Label("End date must be on or after the start date.",
+                              systemImage: "exclamationmark.triangle")
+                            .font(.caption)
+                            .foregroundStyle(.orange)
+                    }
                 }
+                Button {
+                    shareURL = model.db.exportCSV(
+                        sessionID: nil,
+                        from: limitRange ? rangeBounds?.from : nil,
+                        to: limitRange ? rangeBounds?.to : nil)
+                } label: {
+                    Label(limitRange ? "Export Range as CSV" : "Export All as CSV",
+                          systemImage: "square.and.arrow.up")
+                }
+                .disabled(limitRange && !rangeValid)
+            } header: {
+                Text("Export")
+            } footer: {
+                if limitRange {
+                    Text("Exports whole calendar days, inclusive of both dates. If no samples fall in the range, no file is produced.")
+                }
+            }
+
+            Section {
                 Button(role: .destructive) {
                     confirmClear = true
                 } label: {
@@ -256,6 +286,23 @@ struct SessionsView: View {
         } message: {
             Text("This permanently removes every session and sample from the database.")
         }
+    }
+
+    private var rangeValid: Bool {
+        let cal = Calendar.current
+        return cal.startOfDay(for: rangeStart) <= cal.startOfDay(for: rangeEnd)
+    }
+
+    /// Whole-calendar-day bounds: `from` = start of the start day,
+    /// `to` = start of the day *after* the end day (exclusive upper bound,
+    /// matching `s.ts < ?` in `exportCSV` so the end day is fully included).
+    private var rangeBounds: (from: Date, to: Date)? {
+        guard rangeValid else { return nil }
+        let cal = Calendar.current
+        let from = cal.startOfDay(for: rangeStart)
+        guard let to = cal.date(byAdding: .day, value: 1,
+                                 to: cal.startOfDay(for: rangeEnd)) else { return nil }
+        return (from, to)
     }
 
     /// Prefer recorded sensor model over the advertised BLE name.

@@ -53,10 +53,17 @@ DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
 be distributed via the App Store immediately** — do this as the final step of
 the work, not a separate ask:
 
-- Always increment `CURRENT_PROJECT_VERSION` (the build number) — App Store
-  Connect rejects an upload that reuses a build number.
 - Bump `MARKETING_VERSION`: minor for a feature (`0.11` → `0.12`), patch for
   a bug fix once a patch component exists.
+- `CURRENT_PROJECT_VERSION` (the build number) is **scoped to the current
+  marketing version**. The App Store only requires it to be unique and
+  increasing *within* a given `MARKETING_VERSION`, so:
+  - When you bump `MARKETING_VERSION`, **reset `CURRENT_PROJECT_VERSION` to
+    1** (build numbering starts fresh per marketing version).
+  - For a second+ App Store upload of the *same* `MARKETING_VERSION`,
+    increment `CURRENT_PROJECT_VERSION` (2, 3, …) instead.
+  - The normal feature/fix flow bumps the marketing version, so the usual
+    outcome is `MARKETING_VERSION` up + build reset to `1`.
 - All four occurrences of each key in `project.pbxproj` (Debug+Release ×
   app+widget target) must move together — keep app and widget in lockstep.
 - **Commit without asking.** The owner has standing authorization for Claude
