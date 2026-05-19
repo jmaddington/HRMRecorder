@@ -4,9 +4,6 @@ struct ContentView: View {
     @EnvironmentObject private var hr: HeartRateManager
     @EnvironmentObject private var model: AppModel
 
-    @State private var sessions: [HRDatabase.SessionInfo] = []
-    @State private var shareURL: URL?
-    @State private var confirmClear = false
     @State private var now = Date()
     @State private var beat = false
     @State private var showDevicePicker = false
@@ -19,33 +16,26 @@ struct ContentView: View {
                 liveSection
                 deviceSection
                 recordSection
-                sessionsSection
-                exportSection
+                Section {
+                    NavigationLink {
+                        SessionsView()
+                    } label: {
+                        Label("Sessions", systemImage: "list.bullet.rectangle")
+                    }
+                }
             }
             .navigationTitle("HRM Recorder")
             .listStyle(.insetGrouped)
         }
-        .onAppear(perform: reload)
+        .onAppear { maybePresentPicker() }
         .onReceive(tick) { now = $0 }
-        .onChange(of: hr.isRecording) { _ in reload() }
-        .sheet(item: $shareURL) { url in
-            ShareSheet(items: [url])
-        }
+        .onChange(of: hr.state) { _ in maybePresentPicker() }
         .sheet(isPresented: $showDevicePicker) {
             DevicePickerView { device in
                 hr.select(device)
                 showDevicePicker = false
             }
             .environmentObject(hr)
-        }
-        .alert("Delete all recorded data?", isPresented: $confirmClear) {
-            Button("Delete Everything", role: .destructive) {
-                model.db.deleteAll()
-                reload()
-            }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("This permanently removes every session and sample from the database.")
         }
     }
 
@@ -136,7 +126,6 @@ struct ContentView: View {
         Section("Recording") {
             Button {
                 hr.isRecording ? hr.stopRecording() : hr.startRecording()
-                reload()
             } label: {
                 HStack {
                     Image(systemName: hr.isRecording ? "stop.circle.fill" : "record.circle")
@@ -151,64 +140,6 @@ struct ContentView: View {
                 LabeledContent("Elapsed", value: elapsedString)
                 LabeledContent("Samples saved", value: "\(hr.sessionSampleCount)")
             }
-        }
-    }
-
-    // MARK: - Sessions
-
-    private var sessionsSection: some View {
-        Section("Sessions") {
-            if sessions.isEmpty {
-                Text("No sessions yet").foregroundStyle(.secondary)
-            }
-            ForEach(sessions) { s in
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(s.startedAt, format: .dateTime.year().month().day()
-                        .hour().minute().second())
-                        .font(.subheadline.weight(.medium))
-                    HStack(spacing: 10) {
-                        Label("\(s.sampleCount)", systemImage: "waveform.path.ecg")
-                        if let sensor = sessionSensorLabel(s) {
-                            Label(sensor, systemImage: "sensor.tag.radiowaves.forward")
-                        }
-                        if s.endedAt == nil {
-                            Text("active").foregroundStyle(.red)
-                        }
-                    }
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                }
-                .swipeActions(edge: .trailing) {
-                    Button(role: .destructive) {
-                        model.db.deleteSession(s.id)
-                        reload()
-                    } label: { Label("Delete", systemImage: "trash") }
-                    Button {
-                        shareURL = model.db.exportCSV(sessionID: s.id)
-                    } label: { Label("CSV", systemImage: "square.and.arrow.up") }
-                    .tint(.blue)
-                }
-            }
-        }
-    }
-
-    // MARK: - Export & maintenance
-
-    private var exportSection: some View {
-        Section {
-            Button {
-                shareURL = model.db.exportCSV(sessionID: nil)
-            } label: {
-                Label("Export All as CSV", systemImage: "square.and.arrow.up")
-            }
-            Button(role: .destructive) {
-                confirmClear = true
-            } label: {
-                Label("Delete All Data", systemImage: "trash")
-            }
-        } footer: {
-            Text("Database: \(model.db.fileURL.path)")
-                .font(.caption2)
         }
     }
 
@@ -227,6 +158,100 @@ struct ContentView: View {
         guard let start = hr.sessionStartedAt else { return "0:00" }
         let s = Int(now.timeIntervalSince(start))
         return String(format: "%d:%02d:%02d", s / 3600, (s % 3600) / 60, s % 60)
+    }
+
+    /// Surface the strap picker automatically when the app is scanning and the
+    /// user genuinely has to choose: nothing connected, no remembered strap to
+    /// reconnect to silently, and not mid-recording. Without this the scan runs
+    /// invisibly and found monitors never appear unless the user knows to tap
+    /// "Choose Device".
+    private func maybePresentPicker() {
+        guard !showDevicePicker,
+              hr.state == .scanning,
+              !hr.isRecording,
+              UserDefaults.standard.string(forKey: "preferredDeviceUUID") == nil
+        else { return }
+        showDevicePicker = true
+    }
+}
+
+/// Recorded sessions, behind a button off the main screen so the live-BPM
+/// view stays uncluttered. Owns its own data load + the session-scoped and
+/// whole-database export/delete actions.
+struct SessionsView: View {
+    @EnvironmentObject private var model: AppModel
+
+    @State private var sessions: [HRDatabase.SessionInfo] = []
+    @State private var shareURL: URL?
+    @State private var confirmClear = false
+
+    var body: some View {
+        List {
+            Section {
+                if sessions.isEmpty {
+                    Text("No sessions yet").foregroundStyle(.secondary)
+                }
+                ForEach(sessions) { s in
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(s.startedAt, format: .dateTime.year().month().day()
+                            .hour().minute().second())
+                            .font(.subheadline.weight(.medium))
+                        HStack(spacing: 10) {
+                            Label("\(s.sampleCount)", systemImage: "waveform.path.ecg")
+                            if let sensor = sessionSensorLabel(s) {
+                                Label(sensor, systemImage: "sensor.tag.radiowaves.forward")
+                            }
+                            if s.endedAt == nil {
+                                Text("active").foregroundStyle(.red)
+                            }
+                        }
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    }
+                    .swipeActions(edge: .trailing) {
+                        Button(role: .destructive) {
+                            model.db.deleteSession(s.id)
+                            reload()
+                        } label: { Label("Delete", systemImage: "trash") }
+                        Button {
+                            shareURL = model.db.exportCSV(sessionID: s.id)
+                        } label: { Label("CSV", systemImage: "square.and.arrow.up") }
+                        .tint(.blue)
+                    }
+                }
+            }
+
+            Section {
+                Button {
+                    shareURL = model.db.exportCSV(sessionID: nil)
+                } label: {
+                    Label("Export All as CSV", systemImage: "square.and.arrow.up")
+                }
+                Button(role: .destructive) {
+                    confirmClear = true
+                } label: {
+                    Label("Delete All Data", systemImage: "trash")
+                }
+            } footer: {
+                Text("Database: \(model.db.fileURL.path)")
+                    .font(.caption2)
+            }
+        }
+        .navigationTitle("Sessions")
+        .listStyle(.insetGrouped)
+        .onAppear { reload() }
+        .sheet(item: $shareURL) { url in
+            ShareSheet(items: [url])
+        }
+        .alert("Delete all recorded data?", isPresented: $confirmClear) {
+            Button("Delete Everything", role: .destructive) {
+                model.db.deleteAll()
+                reload()
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This permanently removes every session and sample from the database.")
+        }
     }
 
     /// Prefer recorded sensor model over the advertised BLE name.

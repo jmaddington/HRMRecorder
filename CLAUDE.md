@@ -10,6 +10,21 @@ write every reading to SQLite in real time, with CSV export. Deliberately *no*
 activity/GPS recording — heart rate only. No third-party dependencies (system
 `SQLite3` module + CoreBluetooth + SwiftUI).
 
+## Product principles
+
+These are hard constraints, not aspirations — weigh every change against them:
+
+- **Stay simple.** The app does two things: *record HR* and *export HR*. Resist
+  scope creep; a feature that doesn't serve recording or exporting probably
+  doesn't belong.
+- **Keep the UI uncluttered.** Default to fewer controls on screen. Prefer
+  pushing secondary functions behind a button/sub-page over adding to the main
+  screen. The live-BPM screen should stay clean.
+- **Be ruthlessly memory-light.** This must be the *last* app a user would ever
+  think to kill to free resources. No retained buffers that grow unbounded, no
+  caching what can be streamed, no holding samples in memory (the fire-and-
+  forget insert path exists for this reason). Background footprint matters most.
+
 ## Build / run
 
 `xcode-select` on this machine points at the Command Line Tools, not Xcode.app,
@@ -31,6 +46,26 @@ DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
 - SourceKit diagnostics that appear when editing a single file in isolation
   (e.g. "Cannot find type 'HRDatabase'") are false positives; trust the
   `xcodebuild` result, which compiles the whole module together.
+
+## Release / versioning
+
+**After every completed feature or bug fix, bump the version so a build can
+be distributed via the App Store immediately** — do this as the final step of
+the work, not a separate ask:
+
+- Always increment `CURRENT_PROJECT_VERSION` (the build number) — App Store
+  Connect rejects an upload that reuses a build number.
+- Bump `MARKETING_VERSION`: minor for a feature (`0.11` → `0.12`), patch for
+  a bug fix once a patch component exists.
+- All four occurrences of each key in `project.pbxproj` (Debug+Release ×
+  app+widget target) must move together — keep app and widget in lockstep.
+- **Commit without asking.** The owner has standing authorization for Claude
+  to `git commit` completed work directly to `main` (solo, local-only repo, no
+  remote — nothing leaves the machine, and immediate commits enable fast App
+  Store turnaround). This supersedes the "commits happen only when the user
+  explicitly asks" line in the beads-integration block below. Still do not
+  `git push` (there is no remote) unless asked. Reference the bd issue id in
+  the commit message.
 
 ## Project format gotchas
 
@@ -124,49 +159,30 @@ every CSV row via a `LEFT JOIN`.
 
 
 <!-- BEGIN BEADS INTEGRATION v:1 profile:minimal hash:7510c1e2 -->
-## Beads Issue Tracker
+## Beads issue tracker
 
-This project uses **bd (beads)** for issue tracking. Run `bd prime` to see full workflow context and commands.
-
-### Quick Reference
+Issues for this repo are tracked with **bd (beads)** — a dependency-aware
+graph tracker backed by an embedded Dolt DB in `.beads/`. Issue prefix is
+`HRMRecorder-<hash>` (e.g. `HRMRecorder-r1g`). Run `bd prime` for the full
+command reference and workflow context.
 
 ```bash
-bd ready              # Find available work
-bd show <id>          # View issue details
-bd update <id> --claim  # Claim work
-bd close <id>         # Complete work
+bd ready                 # unblocked work ready to claim
+bd show <id> --json      # issue detail (read metadata before prose)
+bd update <id> --claim   # claim before starting
+bd close <id> "reason"   # complete
+bd create "Title" -t feature -p 2 -d "..."   # file new work
 ```
 
-### Rules
+- Use `bd` for task tracking — **not** TodoWrite/TaskCreate or markdown TODO
+  lists. Use `bd remember` for durable knowledge, not MEMORY.md files.
+- `bd edit` is interactive — never use it; mutate via `bd update --<field>`.
+- `bd init` set `core.hooksPath` to `.beads/hooks` (every git
+  commit/push/checkout/merge in this repo now runs beads hooks) and
+  auto-commits its own `.beads/` changes. Issues live in the local Dolt DB;
+  `.beads/issues.jsonl` is a passive export.
 
-- Use `bd` for ALL task tracking — do NOT use TodoWrite, TaskCreate, or markdown TODO lists
-- Run `bd prime` for detailed command reference and session close protocol
-- Use `bd remember` for persistent knowledge — do NOT use MEMORY.md files
-
-**Architecture in one line:** issues live in a local Dolt DB; sync uses `refs/dolt/data` on your git remote; `.beads/issues.jsonl` is a passive export. See https://github.com/gastownhall/beads/blob/main/docs/SYNC_CONCEPTS.md for details and anti-patterns.
-
-## Session Completion
-
-**When ending a work session**, you MUST complete ALL steps below. Work is NOT complete until `git push` succeeds.
-
-**MANDATORY WORKFLOW:**
-
-1. **File issues for remaining work** - Create issues for anything that needs follow-up
-2. **Run quality gates** (if code changed) - Tests, linters, builds
-3. **Update issue status** - Close finished work, update in-progress items
-4. **PUSH TO REMOTE** - This is MANDATORY:
-   ```bash
-   git pull --rebase
-   git push
-   git status  # MUST show "up to date with origin"
-   ```
-5. **Clean up** - Clear stashes, prune remote branches
-6. **Verify** - All changes committed AND pushed
-7. **Hand off** - Provide context for next session
-
-**CRITICAL RULES:**
-- Work is NOT complete until `git push` succeeds
-- NEVER stop before pushing - that leaves work stranded locally
-- NEVER say "ready to push when you are" - YOU must push
-- If push fails, resolve and retry until it succeeds
+**This repo has no git remote, and commits/pushes happen only when the user
+explicitly asks** — this overrides beads' default "work is not complete until
+`git push` succeeds" session-completion rule, which does not apply here.
 <!-- END BEADS INTEGRATION -->
