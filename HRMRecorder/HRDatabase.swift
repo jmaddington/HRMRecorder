@@ -362,7 +362,13 @@ final class HRDatabase {
     /// and start-of-next-day gets whole calendar days. Both nil = full
     /// history (unchanged legacy behavior). When a date range is supplied
     /// but matches no samples, no file is written and nil is returned.
-    func exportCSV(sessionID: String?, from: Date? = nil, to: Date? = nil) -> URL? {
+    /// `deviceID` (a strap's CBPeripheral UUID) optionally restricts the
+    /// export to one strap; default nil = every strap in scope. Combined with
+    /// the existing per-session / date-range predicates.
+    func exportCSV(sessionID: String?,
+                   from: Date? = nil,
+                   to: Date? = nil,
+                   deviceID: String? = nil) -> URL? {
         queue.sync {
             let stamp = ISO8601DateFormatter.compact.string(from: Date())
             let name = sessionID.map { "HRM_\($0).csv" } ?? "HRM_all_\(stamp).csv"
@@ -394,6 +400,7 @@ final class HRDatabase {
             if sessionID != nil { predicates.append("s.session_id = ?") }
             if from != nil      { predicates.append("s.ts >= ?") }
             if to != nil        { predicates.append("s.ts < ?") }
+            if deviceID != nil  { predicates.append("s.device_id = ?") }
             let whereClause = predicates.isEmpty
                 ? "" : " WHERE " + predicates.joined(separator: " AND ")
             let sql = "SELECT \(cols) FROM samples s "
@@ -410,6 +417,9 @@ final class HRDatabase {
             }
             if let to = to {
                 sqlite3_bind_double(stmt, bindIdx, to.timeIntervalSince1970); bindIdx += 1
+            }
+            if let deviceID = deviceID {
+                sqlite3_bind_text(stmt, bindIdx, deviceID, -1, SQLITE_TRANSIENT); bindIdx += 1
             }
 
             let iso = ISO8601DateFormatter()
@@ -448,9 +458,9 @@ final class HRDatabase {
             if !buffer.isEmpty { handle.write(Data(buffer.utf8)) }
             sqlite3_finalize(stmt)
 
-            // A date-filtered export that matched nothing yields no file
-            // (graceful empty-range handling) rather than a header-only CSV.
-            if rowCount == 0, from != nil || to != nil {
+            // A filtered export (date range or device) that matched nothing
+            // yields no file rather than a header-only CSV.
+            if rowCount == 0, from != nil || to != nil || deviceID != nil {
                 try? handle.close()
                 try? FileManager.default.removeItem(at: url)
                 return nil
