@@ -62,8 +62,11 @@ devices (id TEXT pk, name TEXT, manufacturer TEXT, model TEXT,
   accumulated via COALESCE like the session device fields (`first_seen` is the
   first time the strap was registered).
 - `ts` — Unix epoch seconds (sub-second precision).
-- `rr_ms` — R-R intervals for the packet, `;`-separated, milliseconds (empty
-  if the strap didn't send them).
+- `rr_ms` — R-R intervals for the packet, milliseconds, **semicolon-joined**
+  because one Heart Rate Measurement notification can carry several R-R
+  intervals (empty if the strap didn't send them). In the CSV this cell is
+  RFC-4180 double-quoted so the embedded `;` stays one cell even when opened
+  in a locale that uses `;` as the list separator.
 - `contact` — sensor skin-contact status: `1` good, `0` poor, NULL = not
   reported.
 

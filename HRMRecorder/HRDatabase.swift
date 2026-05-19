@@ -440,8 +440,7 @@ final class HRDatabase {
                 let firmware = field(5)
                 let bodyLoc = field(6)
                 let bpm = sqlite3_column_int(stmt, 7)
-                let rr = sqlite3_column_type(stmt, 8) == SQLITE_NULL
-                    ? "" : String(cString: sqlite3_column_text(stmt, 8))
+                let rr = field(8)   // route through csvEscape (was raw)
                 let contact = sqlite3_column_type(stmt, 9) == SQLITE_NULL
                     ? "" : String(sqlite3_column_int(stmt, 9))
                 let energy = sqlite3_column_type(stmt, 10) == SQLITE_NULL
@@ -476,11 +475,15 @@ final class HRDatabase {
         sqlite3_exec(db, sql, nil, nil, nil) == SQLITE_OK
     }
 
-    /// RFC-4180 quoting so a manufacturer/model containing a comma, quote, or
-    /// newline can't break the CSV layout.
+    /// RFC-4180 quoting so a field can't break the CSV layout. `;` is
+    /// included because `rr_ms` joins multiple R-R intervals with it and `;`
+    /// is the list separator in many European spreadsheet locales — quoting
+    /// keeps such a field a single cell there. Quoting extra fields is always
+    /// valid RFC 4180, so a strict comma parser still round-trips.
     private static func csvEscape(_ s: String) -> String {
-        guard s.contains(where: { $0 == "," || $0 == "\"" || $0 == "\n" || $0 == "\r" })
-        else { return s }
+        guard s.contains(where: {
+            $0 == "," || $0 == "\"" || $0 == "\n" || $0 == "\r" || $0 == ";"
+        }) else { return s }
         return "\"" + s.replacingOccurrences(of: "\"", with: "\"\"") + "\""
     }
 
