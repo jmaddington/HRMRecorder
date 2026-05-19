@@ -1,0 +1,7 @@
+{
+  "database": "dolt",
+  "backend": "dolt",
+  "dolt_mode": "embedded",
+  "dolt_database": "HRMRecorder",
+  "project_id": "23acd2f4-9f6a-4ba5-a955-c0f8019fbd96"
+}
