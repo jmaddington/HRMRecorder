@@ -7,6 +7,7 @@ struct ContentView: View {
     @State private var now = Date()
     @State private var beat = false
     @State private var showDevicePicker = false
+    @State private var deviceExpanded = false
 
     private let tick = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
 
@@ -14,8 +15,8 @@ struct ContentView: View {
         NavigationStack {
             List {
                 liveSection
-                deviceSection
                 recordSection
+                deviceSection
                 Section {
                     NavigationLink {
                         SessionsView()
@@ -91,31 +92,34 @@ struct ContentView: View {
 
     private var deviceSection: some View {
         Section("Device") {
-            LabeledContent("Strap") {
-                Text(hr.state == .connected ? hr.deviceName : "Not selected")
-                    .foregroundStyle(hr.state == .connected ? .primary : .secondary)
-            }
-            if let summary = hr.sensorSummary {
-                LabeledContent("Sensor", value: summary)
-            }
-            if let fw = hr.firmware {
-                LabeledContent("Firmware", value: fw)
-            }
-            Button {
-                hr.startDeviceScan()
-                showDevicePicker = true
-            } label: {
-                Label(hr.state == .connected ? "Change Device" : "Choose Device",
-                      systemImage: "sensor.tag.radiowaves.forward")
-            }
-            .disabled(hr.isRecording)
-            if hr.state == .connected || UserDefaults.standard.string(forKey: "preferredDeviceUUID") != nil {
-                Button(role: .destructive) {
-                    hr.forgetDevice()
+            DisclosureGroup(isExpanded: $deviceExpanded) {
+                if let summary = hr.sensorSummary {
+                    LabeledContent("Sensor", value: summary)
+                }
+                if let fw = hr.firmware {
+                    LabeledContent("Firmware", value: fw)
+                }
+                Button {
+                    hr.startDeviceScan()
+                    showDevicePicker = true
                 } label: {
-                    Label("Forget Device", systemImage: "minus.circle")
+                    Label(hr.state == .connected ? "Change Device" : "Choose Device",
+                          systemImage: "sensor.tag.radiowaves.forward")
                 }
                 .disabled(hr.isRecording)
+                if hr.state == .connected || UserDefaults.standard.string(forKey: "preferredDeviceUUID") != nil {
+                    Button(role: .destructive) {
+                        hr.forgetDevice()
+                    } label: {
+                        Label("Forget Device", systemImage: "minus.circle")
+                    }
+                    .disabled(hr.isRecording)
+                }
+            } label: {
+                LabeledContent("Strap") {
+                    Text(hr.state == .connected ? hr.deviceName : "Not selected")
+                        .foregroundStyle(hr.state == .connected ? .primary : .secondary)
+                }
             }
         }
     }
