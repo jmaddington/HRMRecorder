@@ -342,10 +342,19 @@ final class HeartRateManager: NSObject, ObservableObject {
         central.connect(p, options: nil)
     }
 
-    /// Write whatever sensor identity we currently know onto the active
-    /// session. Safe to call repeatedly — partial reads accumulate via
-    /// COALESCE in the DB layer.
+    /// Write whatever sensor identity we currently know: one row per strap in
+    /// `devices` (so per-sample attribution resolves), plus the primary strap
+    /// onto the session row (the session-level label, unchanged). Safe to call
+    /// repeatedly — partial reads accumulate via COALESCE in the DB layer.
     private func persistDeviceInfo() {
+        for d in devices.values {
+            db.setDevice(id: d.id.uuidString,
+                         name: d.name == "—" ? nil : d.name,
+                         manufacturer: d.manufacturer,
+                         model: d.model,
+                         firmware: d.firmware,
+                         bodyLocation: d.bodyLocation)
+        }
         guard let id = sessionID else { return }
         db.setSessionDevice(sessionID: id,
                             manufacturer: manufacturer,
@@ -587,10 +596,13 @@ extension HeartRateManager: CBPeripheralDelegate {
         refreshPrimaryMirror()
 
         if isRecording, let sid = sessionID {
-            // P1 keeps the legacy call (no deviceID) so single-strap output
-            // is byte-identical; P2 adds per-sample attribution.
+            // Stamp each sample with its source strap so a session spanning
+            // several straps stays attributable in the CSV. Single-strap
+            // output is unchanged: export COALESCEs the devices row over the
+            // session row to the same identity (first 12 cols byte-identical).
             db.insertSample(sessionID: sid, date: now, bpm: bpm,
-                            rr: rr, contact: contact, energyKJ: energy)
+                            rr: rr, contact: contact, energyKJ: energy,
+                            deviceID: devID.uuidString)
             sessionSampleCount += 1
             if #available(iOS 16.2, *), devID == primaryDeviceID {
                 liveActivity.update(bpm: bpm, contact: contact, now: now)
