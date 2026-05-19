@@ -57,7 +57,6 @@ final class HeartRateManager: NSObject, ObservableObject {
         var name: String
         var state: State = .connecting
         var heartRate = 0
-        var rrIntervals: [Int] = []
         var sensorContact: Bool?
         var energyKJ: Int?
         var lastUpdate: Date?
@@ -70,7 +69,6 @@ final class HeartRateManager: NSObject, ObservableObject {
     @Published private(set) var state: State = .disconnected
     @Published private(set) var deviceName = "—"
     @Published private(set) var heartRate = 0
-    @Published private(set) var rrIntervals: [Int] = []
     @Published private(set) var sensorContact: Bool?
     @Published private(set) var energyKJ: Int?
     @Published private(set) var lastUpdate: Date?
@@ -179,14 +177,13 @@ final class HeartRateManager: NSObject, ObservableObject {
             primaryDeviceID = devices.values.first?.id
         }
         guard let d = primaryDeviceID.flatMap({ devices[$0] }) else {
-            deviceName = "—"; heartRate = 0; rrIntervals = []
+            deviceName = "—"; heartRate = 0
             sensorContact = nil; energyKJ = nil; lastUpdate = nil
             manufacturer = nil; model = nil; firmware = nil; bodyLocation = nil
             return
         }
         deviceName = d.name
         heartRate = d.heartRate
-        rrIntervals = d.rrIntervals
         sensorContact = d.sensorContact
         energyKJ = d.energyKJ
         lastUpdate = d.lastUpdate
@@ -606,7 +603,6 @@ extension HeartRateManager: CBPeripheralDelegate {
         let devID = peripheral.identifier
         if devices[devID] != nil {
             devices[devID]!.heartRate = bpm
-            devices[devID]!.rrIntervals = rr
             devices[devID]!.sensorContact = contact
             devices[devID]!.energyKJ = energy
             devices[devID]!.lastUpdate = now

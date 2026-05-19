@@ -82,11 +82,6 @@ struct ContentView: View {
                         .font(.caption)
                         .foregroundStyle(c ? .green : .orange)
                 }
-                if !hr.rrIntervals.isEmpty {
-                    Text("RR: " + hr.rrIntervals.map { "\($0)" }.joined(separator: " ") + " ms")
-                        .font(.caption2)
-                        .foregroundStyle(.tertiary)
-                }
             }
             .frame(maxWidth: .infinity)
             .padding(.vertical, 8)
