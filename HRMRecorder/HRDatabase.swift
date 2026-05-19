@@ -73,12 +73,34 @@ final class HRDatabase {
                     energy_kj   INTEGER
                 );
                 """)
+            // Migrate databases that predate per-sample device attribution.
+            // Existing rows keep device_id NULL — export and session reads
+            // fall back to the session's device_* columns, so pre-feature
+            // data is byte-for-byte unchanged.
+            if !columnExists("samples", "device_id") {
+                exec("ALTER TABLE samples ADD COLUMN device_id TEXT;")
+            }
+            // One row per physical strap, keyed by its CBPeripheral UUID and
+            // accumulated via COALESCE like the session device fields. A
+            // session may span several straps; per-strap identity lives here.
+            exec("""
+                CREATE TABLE IF NOT EXISTS devices (
+                    id            TEXT PRIMARY KEY,
+                    name          TEXT,
+                    manufacturer  TEXT,
+                    model         TEXT,
+                    firmware      TEXT,
+                    body_location TEXT,
+                    first_seen    REAL NOT NULL
+                );
+                """)
             exec("CREATE INDEX IF NOT EXISTS idx_samples_session ON samples(session_id);")
             exec("CREATE INDEX IF NOT EXISTS idx_samples_ts ON samples(ts);")
+            exec("CREATE INDEX IF NOT EXISTS idx_samples_device ON samples(device_id);")
 
             sqlite3_prepare_v2(db, """
-                INSERT INTO samples (session_id, ts, bpm, rr_ms, contact, energy_kj)
-                VALUES (?, ?, ?, ?, ?, ?);
+                INSERT INTO samples (session_id, ts, bpm, rr_ms, contact, energy_kj, device_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?);
                 """, -1, &insertStmt, nil)
         }
     }
@@ -166,14 +188,71 @@ final class HRDatabase {
         }
     }
 
+    /// Register/accumulate one physical strap's identity, keyed by its
+    /// CBPeripheral UUID. Like `setSessionDevice`, Device Information reads
+    /// arrive asynchronously and partially, so this is called repeatedly —
+    /// `INSERT OR IGNORE` stamps `first_seen` once, then COALESCE keeps the
+    /// first non-null value per field rather than clobbering it.
+    func setDevice(id: String,
+                   name: String?,
+                   manufacturer: String?,
+                   model: String?,
+                   firmware: String?,
+                   bodyLocation: String?) {
+        queue.async {
+            var ins: OpaquePointer?
+            if sqlite3_prepare_v2(self.db,
+                "INSERT OR IGNORE INTO devices (id, first_seen) VALUES (?, ?);",
+                -1, &ins, nil) == SQLITE_OK {
+                sqlite3_bind_text(ins, 1, id, -1, SQLITE_TRANSIENT)
+                sqlite3_bind_double(ins, 2, Date().timeIntervalSince1970)
+                sqlite3_step(ins)
+            }
+            sqlite3_finalize(ins)
+
+            var stmt: OpaquePointer?
+            let sql = """
+                UPDATE devices SET
+                    name          = COALESCE(?, name),
+                    manufacturer  = COALESCE(?, manufacturer),
+                    model         = COALESCE(?, model),
+                    firmware      = COALESCE(?, firmware),
+                    body_location = COALESCE(?, body_location)
+                WHERE id = ?;
+                """
+            if sqlite3_prepare_v2(self.db, sql, -1, &stmt, nil) == SQLITE_OK {
+                let bind: (Int32, String?) -> Void = { idx, value in
+                    if let v = value {
+                        sqlite3_bind_text(stmt, idx, v, -1, SQLITE_TRANSIENT)
+                    } else {
+                        sqlite3_bind_null(stmt, idx)
+                    }
+                }
+                bind(1, name)
+                bind(2, manufacturer)
+                bind(3, model)
+                bind(4, firmware)
+                bind(5, bodyLocation)
+                sqlite3_bind_text(stmt, 6, id, -1, SQLITE_TRANSIENT)
+                sqlite3_step(stmt)
+            }
+            sqlite3_finalize(stmt)
+        }
+    }
+
     // MARK: - Samples (hot path — fire and forget on the serial queue)
 
+    /// `deviceID` (the source strap's CBPeripheral UUID) defaults to nil so
+    /// every existing call site and the single-strap path stay byte-identical:
+    /// a NULL device_id makes export fall back to the session's device_*
+    /// columns. Still one fire-and-forget `queue.async` — just one more bind.
     func insertSample(sessionID: String,
                        date: Date,
                        bpm: Int,
                        rr: [Int],
                        contact: Bool?,
-                       energyKJ: Int?) {
+                       energyKJ: Int?,
+                       deviceID: String? = nil) {
         queue.async {
             guard let stmt = self.insertStmt else { return }
             sqlite3_reset(stmt)
@@ -196,6 +275,11 @@ final class HRDatabase {
                 sqlite3_bind_int(stmt, 6, Int32(e))
             } else {
                 sqlite3_bind_null(stmt, 6)
+            }
+            if let dev = deviceID {
+                sqlite3_bind_text(stmt, 7, dev, -1, SQLITE_TRANSIENT)
+            } else {
+                sqlite3_bind_null(stmt, 7)
             }
             sqlite3_step(stmt)
         }
@@ -288,12 +372,23 @@ final class HRDatabase {
                   let handle = try? FileHandle(forWritingTo: url) else { return nil }
             defer { try? handle.close() }
 
-            handle.write(Data("timestamp_iso,unix_seconds,session_id,device_name,manufacturer,model,firmware,body_location,bpm,rr_ms,sensor_contact,energy_kj\n".utf8))
+            handle.write(Data("timestamp_iso,unix_seconds,session_id,device_name,manufacturer,model,firmware,body_location,bpm,rr_ms,sensor_contact,energy_kj,device_id,device_strap_name\n".utf8))
 
             var stmt: OpaquePointer?
+            // Per-sample strap identity (devices d) takes precedence; when
+            // device_id is NULL (old data / single-strap) every COALESCE
+            // falls back to the session row, so the first 12 columns are
+            // byte-identical to pre-feature exports. device_id and
+            // device_strap_name are appended (never reorder existing cols).
             let cols = """
-                s.ts, s.session_id, e.device_name, e.manufacturer, e.model,
-                e.firmware, e.body_location, s.bpm, s.rr_ms, s.contact, s.energy_kj
+                s.ts, s.session_id,
+                COALESCE(d.name,          e.device_name)   AS device_name,
+                COALESCE(d.manufacturer,  e.manufacturer)  AS manufacturer,
+                COALESCE(d.model,         e.model)         AS model,
+                COALESCE(d.firmware,      e.firmware)      AS firmware,
+                COALESCE(d.body_location, e.body_location) AS body_location,
+                s.bpm, s.rr_ms, s.contact, s.energy_kj,
+                s.device_id, d.name AS device_strap_name
                 """
             var predicates: [String] = []
             if sessionID != nil { predicates.append("s.session_id = ?") }
@@ -302,7 +397,8 @@ final class HRDatabase {
             let whereClause = predicates.isEmpty
                 ? "" : " WHERE " + predicates.joined(separator: " AND ")
             let sql = "SELECT \(cols) FROM samples s "
-                + "LEFT JOIN sessions e ON e.id = s.session_id"
+                + "LEFT JOIN sessions e ON e.id = s.session_id "
+                + "LEFT JOIN devices  d ON d.id = s.device_id"
                 + "\(whereClause) ORDER BY s.ts ASC;"
             guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return nil }
             var bindIdx: Int32 = 1
@@ -340,8 +436,10 @@ final class HRDatabase {
                     ? "" : String(sqlite3_column_int(stmt, 9))
                 let energy = sqlite3_column_type(stmt, 10) == SQLITE_NULL
                     ? "" : String(sqlite3_column_int(stmt, 10))
+                let deviceID = field(11)
+                let deviceStrap = field(12)
                 let isoStr = iso.string(from: Date(timeIntervalSince1970: ts))
-                buffer += "\(isoStr),\(ts),\(sid),\(deviceName),\(manufacturer),\(model),\(firmware),\(bodyLoc),\(bpm),\(rr),\(contact),\(energy)\n"
+                buffer += "\(isoStr),\(ts),\(sid),\(deviceName),\(manufacturer),\(model),\(firmware),\(bodyLoc),\(bpm),\(rr),\(contact),\(energy),\(deviceID),\(deviceStrap)\n"
                 if buffer.utf8.count > 64 * 1024 {
                     handle.write(Data(buffer.utf8))
                     buffer.removeAll(keepingCapacity: true)

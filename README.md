@@ -43,14 +43,24 @@ the app, WAL mode for durable real-time writes).
 sessions(id TEXT pk, started_at REAL, ended_at REAL, device_name TEXT,
          manufacturer TEXT, model TEXT, firmware TEXT, body_location TEXT)
 samples (id INTEGER pk, session_id TEXT, ts REAL, bpm INTEGER,
-         rr_ms TEXT, contact INTEGER, energy_kj INTEGER)
+         rr_ms TEXT, contact INTEGER, energy_kj INTEGER, device_id TEXT)
+devices (id TEXT pk, name TEXT, manufacturer TEXT, model TEXT,
+         firmware TEXT, body_location TEXT, first_seen REAL)
 ```
 
 - `device_name` — BLE advertised name. `manufacturer` / `model` / `firmware`
   are read from the standard Device Information Service (0x180A);
   `body_location` from Body Sensor Location (0x2A38), e.g. Garmin / HRM-Pro+ /
-  Chest. These are recorded per session (sensor identity is constant for a
-  session) and may be NULL if the strap doesn't expose them.
+  Chest. The `sessions` columns record the session's primary strap and may be
+  NULL if the strap doesn't expose them.
+- `samples.device_id` — the CBPeripheral UUID of the strap that produced that
+  reading. A session may span more than one strap (multiple straps recorded at
+  once, or a mid-recording swap); each sample is attributed to its source.
+  NULL for data recorded before this feature — such rows fall back to the
+  session's device columns, so old databases export unchanged.
+- `devices` — one row per physical strap, keyed by its BLE UUID and
+  accumulated via COALESCE like the session device fields (`first_seen` is the
+  first time the strap was registered).
 - `ts` — Unix epoch seconds (sub-second precision).
 - `rr_ms` — R-R intervals for the packet, `;`-separated, milliseconds (empty
   if the strap didn't send them).
@@ -63,11 +73,17 @@ samples (id INTEGER pk, session_id TEXT, ts REAL, bpm INTEGER,
 opens in the iOS share sheet (save to Files, AirDrop, email, etc.). Columns:
 
 ```
-timestamp_iso,unix_seconds,session_id,device_name,manufacturer,model,firmware,body_location,bpm,rr_ms,sensor_contact,energy_kj
+timestamp_iso,unix_seconds,session_id,device_name,manufacturer,model,firmware,body_location,bpm,rr_ms,sensor_contact,energy_kj,device_id,device_strap_name
 ```
 
-Sensor identity columns are denormalized onto every row (joined from the
-session) so each CSV is self-describing; text fields are RFC-4180 quoted.
+Sensor identity columns are denormalized onto every row so each CSV is
+self-describing; text fields are RFC-4180 quoted. `device_name` /
+`manufacturer` / `model` / `firmware` / `body_location` resolve from the
+per-sample strap (`devices`) when known, falling back to the session
+identity otherwise — so the first 12 columns are unchanged and byte-identical
+to prior exports for single-strap sessions. `device_id` /
+`device_strap_name` are appended (stable column order) and are blank for
+pre-feature rows.
 
 ## Project layout
 
