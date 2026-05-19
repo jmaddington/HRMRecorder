@@ -319,6 +319,14 @@ struct SessionsView: View {
             }
 
             Section {
+                NavigationLink {
+                    ServerSyncView()
+                } label: {
+                    Label("Server Sync", systemImage: "arrow.up.circle")
+                }
+            }
+
+            Section {
                 Button(role: .destructive) {
                     confirmClear = true
                 } label: {
