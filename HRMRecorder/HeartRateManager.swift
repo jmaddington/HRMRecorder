@@ -48,6 +48,25 @@ final class HeartRateManager: NSObject, ObservableObject {
         var rssi: Int
     }
 
+    /// One connected (or connecting) strap. The app can hold several at once;
+    /// the scalar `@Published` properties below mirror whichever is `primary`
+    /// so existing single-strap UI binds unchanged.
+    struct ConnectedDevice: Identifiable {
+        let id: UUID                       // CBPeripheral.identifier
+        var peripheral: CBPeripheral
+        var name: String
+        var state: State = .connecting
+        var heartRate = 0
+        var rrIntervals: [Int] = []
+        var sensorContact: Bool?
+        var energyKJ: Int?
+        var lastUpdate: Date?
+        var manufacturer: String?
+        var model: String?
+        var firmware: String?
+        var bodyLocation: String?
+    }
+
     @Published private(set) var state: State = .disconnected
     @Published private(set) var deviceName = "—"
     @Published private(set) var heartRate = 0
@@ -77,9 +96,14 @@ final class HeartRateManager: NSObject, ObservableObject {
     @Published private(set) var sessionStartedAt: Date?
     @Published private(set) var sessionSampleCount = 0
 
+    /// All connected/connecting straps, keyed by peripheral UUID. The scalar
+    /// `@Published` properties mirror `primaryDeviceID`'s entry so single-strap
+    /// UI is unchanged; secondary straps surface in the multi-strap UI (P3).
+    @Published private(set) var devices: [UUID: ConnectedDevice] = [:]
+    private var primaryDeviceID: UUID?
+
     private let db: HRDatabase
     private var central: CBCentralManager!
-    private var peripheral: CBPeripheral?
     private var sessionID: String?
 
     /// Lock-screen / Dynamic Island Live Activity, alive only while recording.
@@ -96,8 +120,8 @@ final class HeartRateManager: NSObject, ObservableObject {
     /// releases any peripheral we don't retain, which would break `select`.
     private var seen: [UUID: CBPeripheral] = [:]
 
-    /// When a strap was previously chosen, reconnect to it without prompting.
-    private var autoConnectPreferred = false
+    /// UUIDs of remembered straps we're scanning to silently reconnect.
+    private var autoConnectPreferred: Set<UUID> = []
 
     private let hrService = CBUUID(string: "180D")
     private let hrMeasurement = CBUUID(string: "2A37")
@@ -106,8 +130,52 @@ final class HeartRateManager: NSObject, ObservableObject {
     private let cManufacturer = CBUUID(string: "2A29")
     private let cModel = CBUUID(string: "2A24")
     private let cFirmware = CBUUID(string: "2A26")
-    private let preferredDeviceKey = "preferredDeviceUUID"
+    private let preferredDeviceKey = "preferredDeviceUUID"      // legacy single
+    private let preferredDevicesKey = "preferredDeviceUUIDs"    // set of UUIDs
     private let activeSessionKey = "activeSessionID"
+
+    /// Remembered straps to silently reconnect. Migrates the old single-key
+    /// value once so an upgrading user keeps their strap.
+    private var preferredDeviceIDs: Set<String> {
+        get {
+            if let arr = UserDefaults.standard.array(forKey: preferredDevicesKey) as? [String] {
+                return Set(arr)
+            }
+            if let one = UserDefaults.standard.string(forKey: preferredDeviceKey) {
+                return [one]                                   // legacy fallback
+            }
+            return []
+        }
+        set {
+            UserDefaults.standard.set(Array(newValue), forKey: preferredDevicesKey)
+            UserDefaults.standard.removeObject(forKey: preferredDeviceKey)
+        }
+    }
+
+    /// Copy the primary strap's live values into the scalar `@Published`
+    /// mirror (or reset to the disconnected defaults when none). Called on
+    /// every `devices` mutation so the existing single-strap UI is unchanged.
+    private func refreshPrimaryMirror() {
+        if primaryDeviceID == nil || devices[primaryDeviceID!] == nil {
+            primaryDeviceID = devices.values.first?.id
+        }
+        guard let d = primaryDeviceID.flatMap({ devices[$0] }) else {
+            deviceName = "—"; heartRate = 0; rrIntervals = []
+            sensorContact = nil; energyKJ = nil; lastUpdate = nil
+            manufacturer = nil; model = nil; firmware = nil; bodyLocation = nil
+            return
+        }
+        deviceName = d.name
+        heartRate = d.heartRate
+        rrIntervals = d.rrIntervals
+        sensorContact = d.sensorContact
+        energyKJ = d.energyKJ
+        lastUpdate = d.lastUpdate
+        manufacturer = d.manufacturer
+        model = d.model
+        firmware = d.firmware
+        bodyLocation = d.bodyLocation
+    }
 
     init(db: HRDatabase) {
         self.db = db
@@ -180,7 +248,7 @@ final class HeartRateManager: NSObject, ObservableObject {
     /// Begin (or restart) a scan that populates `discoveredDevices` for the
     /// user to choose from. Does not auto-connect.
     func startDeviceScan() {
-        autoConnectPreferred = false
+        autoConnectPreferred = []
         seen.removeAll()
         discoveredDevices = []
         guard central.state == .poweredOn else { return }
@@ -192,18 +260,32 @@ final class HeartRateManager: NSObject, ObservableObject {
     }
 
     /// Connect to a user-chosen strap and remember it for next launch.
+    /// The picker is single-select in P1, so a not-recording pick *switches*
+    /// straps (cancel the others) to preserve one-strap behavior; P3 adds an
+    /// explicit "add another strap" path. While recording, the new strap is
+    /// added into the same session (px8) without dropping the others.
     func select(_ device: Device) {
         guard let p = seen[device.id] else { return }
-        UserDefaults.standard.set(device.id.uuidString, forKey: preferredDeviceKey)
+        if !isRecording {
+            for d in devices.values where d.id != device.id {
+                central.cancelPeripheralConnection(d.peripheral)
+            }
+            devices = devices.filter { $0.key == device.id }
+            preferredDeviceIDs = [device.id.uuidString]
+        } else {
+            preferredDeviceIDs.insert(device.id.uuidString)
+        }
+        refreshPrimaryMirror()
         connect(p)
     }
 
-    /// Drop the saved strap and go back to picking one.
+    /// Drop all saved straps and go back to picking one.
     func forgetDevice() {
-        UserDefaults.standard.removeObject(forKey: preferredDeviceKey)
-        if let p = peripheral { central.cancelPeripheralConnection(p) }
-        peripheral = nil
-        deviceName = "—"
+        preferredDeviceIDs = []
+        for d in devices.values { central.cancelPeripheralConnection(d.peripheral) }
+        devices = [:]
+        primaryDeviceID = nil
+        refreshPrimaryMirror()      // resets scalars (deviceName → "—")
         startDeviceScan()
     }
 
@@ -214,42 +296,49 @@ final class HeartRateManager: NSObject, ObservableObject {
     private func autoConnectOrScan() {
         guard central.state == .poweredOn else { return }
 
-        if let p = peripheral {                       // restored by the system
-            connect(p)
+        // Reconnect every peripheral the system restored to us (not just one).
+        for p in devices.values.map(\.peripheral) { connect(p) }
+
+        let remembered = Set(preferredDeviceIDs.compactMap(UUID.init(uuidString:)))
+        var pending = remembered.subtracting(devices.keys)
+        if pending.isEmpty {
+            if devices.isEmpty { startDeviceScan() }   // nothing chosen — pick
             return
         }
-        if let uuidString = UserDefaults.standard.string(forKey: preferredDeviceKey),
-           let uuid = UUID(uuidString: uuidString) {
-            if let p = central.retrievePeripherals(withIdentifiers: [uuid]).first {
-                connect(p)
-                return
-            }
-            if let p = central.retrieveConnectedPeripherals(withServices: [hrService])
-                .first(where: { $0.identifier == uuid }) {
-                connect(p)
-                return
-            }
-            // Remembered strap not immediately retrievable — scan and grab it
-            // as soon as it advertises, without bothering the user.
-            autoConnectPreferred = true
+        for p in central.retrievePeripherals(withIdentifiers: Array(pending))
+        where pending.contains(p.identifier) {
+            connect(p); pending.remove(p.identifier)
+        }
+        for p in central.retrieveConnectedPeripherals(withServices: [hrService])
+        where pending.contains(p.identifier) {
+            connect(p); pending.remove(p.identifier)
+        }
+        // Remaining remembered straps aren't immediately retrievable — scan
+        // and grab each as it advertises, without bothering the user.
+        if !pending.isEmpty {
+            autoConnectPreferred = pending
             state = .scanning
             central.scanForPeripherals(withServices: [hrService], options: nil)
-            return
         }
-        // Nothing chosen yet — let the user pick.
-        startDeviceScan()
     }
 
     private func connect(_ p: CBPeripheral) {
         central.stopScan()
-        peripheral = p
         p.delegate = self
-        deviceName = p.name ?? "Heart-Rate Strap"
-        manufacturer = nil          // clear stale identity until re-read
-        model = nil
-        firmware = nil
-        bodyLocation = nil
+        let name = p.name ?? "Heart-Rate Strap"
+        var d = devices[p.identifier]
+            ?? ConnectedDevice(id: p.identifier, peripheral: p, name: name)
+        d.peripheral = p
+        d.name = name
+        d.state = .connecting
+        d.manufacturer = nil        // clear stale identity until re-read
+        d.model = nil
+        d.firmware = nil
+        d.bodyLocation = nil
+        devices[p.identifier] = d
+        if primaryDeviceID == nil { primaryDeviceID = p.identifier }
         state = .connecting
+        refreshPrimaryMirror()
         central.connect(p, options: nil)
     }
 
@@ -283,12 +372,16 @@ extension HeartRateManager: CBCentralManagerDelegate {
     }
 
     func centralManager(_ central: CBCentralManager, willRestoreState dict: [String: Any]) {
-        if let restored = dict[CBCentralManagerRestoredStatePeripheralsKey] as? [CBPeripheral],
-           let p = restored.first {
-            peripheral = p
+        guard let restored = dict[CBCentralManagerRestoredStatePeripheralsKey]
+            as? [CBPeripheral] else { return }
+        for p in restored {                       // ALL straps, not just first
             p.delegate = self
-            deviceName = p.name ?? "Heart-Rate Strap"
+            let name = p.name ?? "Heart-Rate Strap"
+            devices[p.identifier] = ConnectedDevice(id: p.identifier,
+                                                    peripheral: p, name: name)
+            if primaryDeviceID == nil { primaryDeviceID = p.identifier }
         }
+        refreshPrimaryMirror()
     }
 
     func centralManager(_ central: CBCentralManager,
@@ -298,11 +391,9 @@ extension HeartRateManager: CBCentralManagerDelegate {
         let id = peripheral.identifier
         seen[id] = peripheral
 
-        // Reconnecting to the remembered strap: take it the moment it appears.
-        if autoConnectPreferred,
-           let saved = UserDefaults.standard.string(forKey: preferredDeviceKey),
-           saved == id.uuidString {
-            autoConnectPreferred = false
+        // Reconnecting a remembered strap: take it the moment it appears.
+        if autoConnectPreferred.contains(id) {
+            autoConnectPreferred.remove(id)
             connect(peripheral)
             return
         }
@@ -320,28 +411,37 @@ extension HeartRateManager: CBCentralManagerDelegate {
     }
 
     func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) {
-        deviceName = peripheral.name ?? "Heart-Rate Strap"
+        devices[peripheral.identifier]?.name = peripheral.name ?? "Heart-Rate Strap"
+        refreshPrimaryMirror()
         peripheral.discoverServices([hrService, disService])
     }
 
     func centralManager(_ central: CBCentralManager,
                          didFailToConnect peripheral: CBPeripheral,
                          error: Error?) {
+        devices[peripheral.identifier]?.state = .disconnected
         state = .disconnected
+        refreshPrimaryMirror()
         autoConnectOrScan()
     }
 
     func centralManager(_ central: CBCentralManager,
                          didDisconnectPeripheral peripheral: CBPeripheral,
                          error: Error?) {
+        let id = peripheral.identifier
+        devices[id]?.state = .disconnected
         state = .disconnected
         // Strap dropped (out of range, electrodes dried). Issue a pending
-        // connect — CoreBluetooth honors it in the background and resumes the
-        // active recording session automatically when the strap returns.
-        if peripheral.identifier == self.peripheral?.identifier {
+        // connect for every still-tracked/remembered strap — CoreBluetooth
+        // honors it in the background and resumes the active recording
+        // session automatically when the strap returns. This per-strap
+        // resilience is what makes a backup strap actually back you up.
+        if devices[id] != nil || preferredDeviceIDs.contains(id.uuidString) {
             central.connect(peripheral, options: nil)
+            devices[id]?.state = .connecting
             state = .connecting
         }
+        refreshPrimaryMirror()
     }
 }
 
@@ -351,7 +451,9 @@ extension HeartRateManager: CBPeripheralDelegate {
 
     func peripheral(_ peripheral: CBPeripheral, didDiscoverServices error: Error?) {
         guard let services = peripheral.services else {
+            devices[peripheral.identifier]?.state = .disconnected
             state = .disconnected
+            refreshPrimaryMirror()
             return
         }
         for service in services {
@@ -366,7 +468,11 @@ extension HeartRateManager: CBPeripheralDelegate {
                 break
             }
         }
-        if !services.contains(where: { $0.uuid == hrService }) { state = .disconnected }
+        if !services.contains(where: { $0.uuid == hrService }) {
+            devices[peripheral.identifier]?.state = .disconnected
+            state = .disconnected
+            refreshPrimaryMirror()
+        }
     }
 
     func peripheral(_ peripheral: CBPeripheral,
@@ -376,7 +482,9 @@ extension HeartRateManager: CBPeripheralDelegate {
             switch ch.uuid {
             case hrMeasurement:
                 peripheral.setNotifyValue(true, for: ch)
+                devices[peripheral.identifier]?.state = .connected
                 state = .connected
+                refreshPrimaryMirror()
             case bodySensorLocation, cManufacturer, cModel, cFirmware:
                 peripheral.readValue(for: ch)   // one-shot reads, identity is static
             default:
@@ -389,17 +497,22 @@ extension HeartRateManager: CBPeripheralDelegate {
                     didUpdateValueFor characteristic: CBCharacteristic,
                     error: Error?) {
         guard let data = characteristic.value else { return }
+        let id = peripheral.identifier
         switch characteristic.uuid {
         case hrMeasurement:
-            ingest(data)
+            ingest(data, from: peripheral)
         case cManufacturer:
-            manufacturer = decodeString(data); persistDeviceInfo()
+            devices[id]?.manufacturer = decodeString(data)
+            refreshPrimaryMirror(); persistDeviceInfo()
         case cModel:
-            model = decodeString(data); persistDeviceInfo()
+            devices[id]?.model = decodeString(data)
+            refreshPrimaryMirror(); persistDeviceInfo()
         case cFirmware:
-            firmware = decodeString(data); persistDeviceInfo()
+            devices[id]?.firmware = decodeString(data)
+            refreshPrimaryMirror(); persistDeviceInfo()
         case bodySensorLocation:
-            bodyLocation = Self.bodyLocationName(data.first); persistDeviceInfo()
+            devices[id]?.bodyLocation = Self.bodyLocationName(data.first)
+            refreshPrimaryMirror(); persistDeviceInfo()
         default:
             break
         }
@@ -426,8 +539,9 @@ extension HeartRateManager: CBPeripheralDelegate {
         }
     }
 
-    /// Parse a Heart Rate Measurement packet (Bluetooth GATT 0x2A37).
-    private func ingest(_ data: Data) {
+    /// Parse a Heart Rate Measurement packet (Bluetooth GATT 0x2A37) from a
+    /// specific strap and route it to that strap's `ConnectedDevice` entry.
+    private func ingest(_ data: Data, from peripheral: CBPeripheral) {
         let bytes = [UInt8](data)
         guard bytes.count >= 2 else { return }
 
@@ -462,17 +576,23 @@ extension HeartRateManager: CBPeripheralDelegate {
         }
 
         let now = Date()
-        heartRate = bpm
-        rrIntervals = rr
-        sensorContact = contact
-        energyKJ = energy
-        lastUpdate = now
+        let devID = peripheral.identifier
+        if devices[devID] != nil {
+            devices[devID]!.heartRate = bpm
+            devices[devID]!.rrIntervals = rr
+            devices[devID]!.sensorContact = contact
+            devices[devID]!.energyKJ = energy
+            devices[devID]!.lastUpdate = now
+        }
+        refreshPrimaryMirror()
 
-        if isRecording, let id = sessionID {
-            db.insertSample(sessionID: id, date: now, bpm: bpm,
+        if isRecording, let sid = sessionID {
+            // P1 keeps the legacy call (no deviceID) so single-strap output
+            // is byte-identical; P2 adds per-sample attribution.
+            db.insertSample(sessionID: sid, date: now, bpm: bpm,
                             rr: rr, contact: contact, energyKJ: energy)
             sessionSampleCount += 1
-            if #available(iOS 16.2, *) {
+            if #available(iOS 16.2, *), devID == primaryDeviceID {
                 liveActivity.update(bpm: bpm, contact: contact, now: now)
             }
         }
