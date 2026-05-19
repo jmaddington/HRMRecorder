@@ -147,6 +147,12 @@ final class HeartRateManager: NSObject, ObservableObject {
     private let cManufacturer = CBUUID(string: "2A29")
     private let cModel = CBUUID(string: "2A24")
     private let cFirmware = CBUUID(string: "2A26")
+    /// Invoked once after a session is closed (cold path only — never the
+    /// ~1 Hz `ingest()` path). `AppModel` wires this to `SyncUploader` so a
+    /// finished recording opportunistically uploads. A nil/throwing sink
+    /// must never affect recording.
+    var onSessionClosed: (() -> Void)?
+
     private let preferredDeviceKey = "preferredDeviceUUID"      // legacy single
     private let preferredDevicesKey = "preferredDeviceUUIDs"    // set of UUIDs
     private let activeSessionKey = "activeSessionID"
@@ -237,6 +243,7 @@ final class HeartRateManager: NSObject, ObservableObject {
         sessionID = nil
         sessionStartedAt = nil
         UIApplication.shared.isIdleTimerDisabled = false
+        onSessionClosed?()   // opportunistic sync (cold path; best-effort)
     }
 
     /// Restore an interrupted session after a process restart so capture
