@@ -15,6 +15,7 @@ struct ContentView: View {
         NavigationStack {
             List {
                 liveSection
+                otherStrapsSection
                 recordSection
                 deviceSection
                 Section {
@@ -38,8 +39,7 @@ struct ContentView: View {
         .onChange(of: hr.state) { _ in maybePresentPicker() }
         .sheet(isPresented: $showDevicePicker) {
             DevicePickerView { device in
-                hr.select(device)
-                showDevicePicker = false
+                hr.select(device)          // additive — pick several; tap Done
             }
             .environmentObject(hr)
         }
@@ -93,6 +93,56 @@ struct ContentView: View {
         }
     }
 
+    // MARK: - Other straps
+
+    /// One compact line per non-primary strap — a connection-status list, not
+    /// a dashboard (per-strap analysis is done later in the CSV). Absent with
+    /// a single strap, so the screen is unchanged for the common case.
+    @ViewBuilder
+    private var otherStrapsSection: some View {
+        let others = hr.secondaryDevices
+        if !others.isEmpty {
+            Section("Other straps") {
+                ForEach(others) { d in
+                    HStack(spacing: 8) {
+                        Image(systemName: "heart.fill")
+                            .font(.caption)
+                            .foregroundStyle(.red)
+                        Text(d.heartRate > 0 ? "\(d.heartRate)" : "—")
+                            .font(.title3.weight(.semibold))
+                            .monospacedDigit()
+                        Text("bpm").font(.caption2).foregroundStyle(.secondary)
+                        Spacer()
+                        Text(d.name)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                        Circle()
+                            .fill(Self.color(for: d.state))
+                            .frame(width: 7, height: 7)
+                    }
+                }
+            }
+        }
+    }
+
+    private static func color(for state: HeartRateManager.State) -> Color {
+        switch state {
+        case .connected:              return .green
+        case .scanning, .connecting:  return .orange
+        default:                      return .red
+        }
+    }
+
+    /// Collapsed-row summary: nothing / the strap name / "N straps".
+    private var strapSummary: String {
+        switch hr.devices.count {
+        case 0:  return "Not selected"
+        case 1:  return hr.deviceName
+        default: return "\(hr.devices.count) straps"
+        }
+    }
+
     // MARK: - Device selection
 
     private var deviceSection: some View {
@@ -108,22 +158,21 @@ struct ContentView: View {
                     hr.startDeviceScan()
                     showDevicePicker = true
                 } label: {
-                    Label(hr.state == .connected ? "Change Device" : "Choose Device",
+                    Label(hr.hasDevice ? "Add / Change Strap" : "Choose Device",
                           systemImage: "sensor.tag.radiowaves.forward")
                 }
-                .disabled(hr.isRecording)
-                if hr.state == .connected || UserDefaults.standard.string(forKey: "preferredDeviceUUID") != nil {
+                if hr.hasDevice {
                     Button(role: .destructive) {
                         hr.forgetDevice()
                     } label: {
-                        Label("Forget Device", systemImage: "minus.circle")
+                        Label("Forget All Straps", systemImage: "minus.circle")
                     }
                     .disabled(hr.isRecording)
                 }
             } label: {
-                LabeledContent("Strap") {
-                    Text(hr.state == .connected ? hr.deviceName : "Not selected")
-                        .foregroundStyle(hr.state == .connected ? .primary : .secondary)
+                LabeledContent(hr.devices.count > 1 ? "Straps" : "Strap") {
+                    Text(strapSummary)
+                        .foregroundStyle(hr.hasDevice ? .primary : .secondary)
                 }
             }
         }
@@ -187,7 +236,7 @@ struct ContentView: View {
         guard !showDevicePicker,
               hr.state == .scanning,
               !hr.isRecording,
-              UserDefaults.standard.string(forKey: "preferredDeviceUUID") == nil
+              !hr.hasRememberedStrap
         else { return }
         showDevicePicker = true
     }
@@ -360,12 +409,15 @@ struct DevicePickerView: View {
                         }
                     }
                     ForEach(hr.discoveredDevices) { device in
+                        let isOn = hr.connectedDeviceIDs.contains(device.id)
                         Button {
-                            onSelect(device)
+                            if isOn { hr.forget(device.id) } else { onSelect(device) }
                         } label: {
                             HStack {
-                                Image(systemName: "sensor.tag.radiowaves.forward")
-                                    .foregroundStyle(.tint)
+                                Image(systemName: isOn
+                                      ? "checkmark.circle.fill"
+                                      : "sensor.tag.radiowaves.forward")
+                                    .foregroundStyle(isOn ? Color.green : Color.accentColor)
                                 Text(device.name)
                                     .foregroundStyle(.primary)
                                 Spacer()
@@ -378,14 +430,14 @@ struct DevicePickerView: View {
                         }
                     }
                 } footer: {
-                    Text("Wear the strap with moistened electrodes so it starts advertising. The HRM-Pro+ allows only one Bluetooth connection at a time — disconnect it from Garmin Connect or other devices first.")
+                    Text("Tap a strap to connect it; tap a connected (✓) strap to disconnect it. Connect several different straps at once — to compare them, or as a backup if one drops mid-recording. Each strap (e.g. an HRM-Pro+) still allows only one connection to itself, so disconnect it from Garmin Connect / other apps first.")
                 }
             }
-            .navigationTitle("Choose Device")
+            .navigationTitle(hr.hasDevice ? "Straps" : "Choose Device")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { dismiss() }
+                    Button("Done") { dismiss() }
                 }
                 ToolbarItem(placement: .primaryAction) {
                     Button { hr.startDeviceScan() } label: {

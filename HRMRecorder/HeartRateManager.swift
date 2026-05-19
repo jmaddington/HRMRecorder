@@ -89,6 +89,25 @@ final class HeartRateManager: NSObject, ObservableObject {
         return parts.isEmpty ? nil : parts.joined(separator: " · ")
     }
 
+    /// Connected/connecting straps other than the primary, name-sorted for a
+    /// stable list. The primary strap drives the big BPM display; these
+    /// surface as a compact connection-status list.
+    var secondaryDevices: [ConnectedDevice] {
+        devices.values
+            .filter { $0.id != primaryDeviceID }
+            .sorted { $0.name < $1.name }
+    }
+
+    /// UUIDs of straps currently connected/connecting (for picker checkmarks).
+    var connectedDeviceIDs: Set<UUID> { Set(devices.keys) }
+
+    /// True once at least one strap is connected/connecting.
+    var hasDevice: Bool { !devices.isEmpty }
+
+    /// True if any strap is remembered (so a scan will silently reconnect it
+    /// and the picker should not nag the user).
+    var hasRememberedStrap: Bool { !preferredDeviceIDs.isEmpty }
+
     /// Live results of an in-progress device scan (sorted strongest signal first).
     @Published private(set) var discoveredDevices: [Device] = []
 
@@ -259,24 +278,23 @@ final class HeartRateManager: NSObject, ObservableObject {
             options: [CBCentralManagerScanOptionAllowDuplicatesKey: true])
     }
 
-    /// Connect to a user-chosen strap and remember it for next launch.
-    /// The picker is single-select in P1, so a not-recording pick *switches*
-    /// straps (cancel the others) to preserve one-strap behavior; P3 adds an
-    /// explicit "add another strap" path. While recording, the new strap is
-    /// added into the same session (px8) without dropping the others.
+    /// Connect to a user-chosen strap and remember it. Additive: picking
+    /// another strap *adds* it (record several at once / keep a backup);
+    /// works the same while recording — the new strap joins the same session.
+    /// Single-strap users who only ever pick one see unchanged behavior.
     func select(_ device: Device) {
         guard let p = seen[device.id] else { return }
-        if !isRecording {
-            for d in devices.values where d.id != device.id {
-                central.cancelPeripheralConnection(d.peripheral)
-            }
-            devices = devices.filter { $0.key == device.id }
-            preferredDeviceIDs = [device.id.uuidString]
-        } else {
-            preferredDeviceIDs.insert(device.id.uuidString)
-        }
-        refreshPrimaryMirror()
+        preferredDeviceIDs.insert(device.id.uuidString)
         connect(p)
+    }
+
+    /// Drop one strap: disconnect it, stop remembering it, and remove it.
+    func forget(_ id: UUID) {
+        if let d = devices[id] { central.cancelPeripheralConnection(d.peripheral) }
+        devices[id] = nil
+        if primaryDeviceID == id { primaryDeviceID = nil }
+        preferredDeviceIDs.remove(id.uuidString)
+        refreshPrimaryMirror()      // promotes a new primary or resets scalars
     }
 
     /// Drop all saved straps and go back to picking one.
