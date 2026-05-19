@@ -76,7 +76,11 @@ final class LiveActivityController {
     /// Push a new reading, throttled to protect the background update budget:
     /// at most one update every `minInterval`s, but always on a significant
     /// BPM swing or a skin-contact change so the lock screen stays honest.
-    func update(bpm: Int, contact: Bool?, now: Date) {
+    /// `secondaryBPMs` are the other straps recording into the same session;
+    /// they ride along on whatever push the primary-driven throttle allows so
+    /// N straps never multiply the background update budget (one activity,
+    /// one throttle). Empty → byte-identical single-strap payload.
+    func update(bpm: Int, contact: Bool?, now: Date, secondaryBPMs: [Int] = []) {
         guard let activity else { return }
         let dueByTime = now.timeIntervalSince(lastPushedAt) >= minInterval
         let bigSwing = abs(bpm - lastPushedBPM) >= significantBPMDelta
@@ -88,7 +92,8 @@ final class LiveActivityController {
         lastPushedContact = contact
         let state = HRMActivityAttributes.ContentState(
             bpm: bpm, sensorContact: contact,
-            deviceName: deviceName, lastUpdate: now)
+            deviceName: deviceName, lastUpdate: now,
+            secondaryBPMs: secondaryBPMs.isEmpty ? nil : secondaryBPMs)
         Task { await activity.update(ActivityContent(state: state, staleDate: nil)) }
     }
 

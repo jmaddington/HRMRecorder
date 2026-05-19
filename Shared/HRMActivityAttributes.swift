@@ -23,6 +23,10 @@ struct HRMActivityAttributes: ActivityAttributes {
         var sensorContact: Bool?
         var deviceName: String
         var lastUpdate: Date
+        /// BPM of any additional straps recording into the same session.
+        /// Optional so a single-strap payload is byte-identical to before
+        /// (decodes fine against the old struct; nil → rendered as today).
+        var secondaryBPMs: [Int]? = nil
     }
 
     /// Fixed for the activity's lifetime. Powers `Text(_, style: .timer)` in

@@ -623,7 +623,9 @@ extension HeartRateManager: CBPeripheralDelegate {
                             deviceID: devID.uuidString)
             sessionSampleCount += 1
             if #available(iOS 16.2, *), devID == primaryDeviceID {
-                liveActivity.update(bpm: bpm, contact: contact, now: now)
+                liveActivity.update(bpm: bpm, contact: contact, now: now,
+                                    secondaryBPMs: secondaryDevices
+                                        .map(\.heartRate).filter { $0 > 0 })
             }
         }
     }

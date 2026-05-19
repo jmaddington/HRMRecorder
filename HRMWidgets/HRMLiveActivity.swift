@@ -40,6 +40,9 @@ struct HRMLiveActivity: Widget {
                     HStack(spacing: 6) {
                         Image(systemName: "sensor.tag.radiowaves.forward")
                         Text(context.state.deviceName).lineLimit(1)
+                        if let extra = secondarySummary(context.state.secondaryBPMs) {
+                            Text(extra).monospacedDigit()
+                        }
                         Spacer()
                         contactBadge(context.state.sensorContact)
                     }
@@ -96,6 +99,9 @@ struct LockScreenHRView: View {
             HStack(spacing: 6) {
                 Image(systemName: "sensor.tag.radiowaves.forward")
                 Text(context.state.deviceName).lineLimit(1)
+                if let extra = secondarySummary(context.state.secondaryBPMs) {
+                    Text(extra).monospacedDigit()
+                }
                 Spacer()
                 if let contact = context.state.sensorContact, !contact {
                     Label("Poor skin contact", systemImage: "exclamationmark.triangle")
@@ -108,4 +114,12 @@ struct LockScreenHRView: View {
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
     }
+}
+
+/// Compact "+ 72 · 75" tag for any additional straps recording into the same
+/// session. `nil`/empty (the single-strap case) renders nothing, so the
+/// lock screen and Dynamic Island are unchanged for one strap.
+private func secondarySummary(_ bpms: [Int]?) -> String? {
+    guard let bpms, !bpms.isEmpty else { return nil }
+    return "+ " + bpms.map(String.init).joined(separator: " · ")
 }
