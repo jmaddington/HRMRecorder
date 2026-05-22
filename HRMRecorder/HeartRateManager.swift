@@ -178,9 +178,26 @@ final class HeartRateManager: NSObject, ObservableObject {
     /// Copy the primary strap's live values into the scalar `@Published`
     /// mirror (or reset to the disconnected defaults when none). Called on
     /// every `devices` mutation so the existing single-strap UI is unchanged.
+    ///
+    /// Also keeps the Live Activity / big-BPM display attached to a *working*
+    /// strap: if the current primary has dropped (not `.connected`) but
+    /// another strap still is, the connected one is promoted. We only
+    /// promote into the primary slot — we never demote a still-connected
+    /// primary back to secondary when an old strap reconnects (avoids
+    /// flap on a flaky monitor). Sort by name so the choice between two
+    /// connected secondaries is deterministic.
     private func refreshPrimaryMirror() {
-        if primaryDeviceID == nil || devices[primaryDeviceID!] == nil {
-            primaryDeviceID = devices.values.first?.id
+        let currentPrimary = primaryDeviceID.flatMap { devices[$0] }
+        if currentPrimary == nil || currentPrimary?.state != .connected {
+            let connectedAlt = devices.values
+                .filter { $0.state == .connected }
+                .sorted { $0.name < $1.name }
+                .first
+            if let alt = connectedAlt {
+                primaryDeviceID = alt.id
+            } else if currentPrimary == nil {
+                primaryDeviceID = devices.values.first?.id
+            }
         }
         guard let d = primaryDeviceID.flatMap({ devices[$0] }) else {
             deviceName = "—"; heartRate = 0

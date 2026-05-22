@@ -19,8 +19,14 @@ struct HRMWidgetsBundle: WidgetBundle {
 struct HRMLiveActivity: Widget {
     var body: some WidgetConfiguration {
         ActivityConfiguration(for: HRMActivityAttributes.self) { context in
+            // Force a dark canvas with explicitly light foregrounds so the
+            // lock screen can never end up dark-on-dark (the system's
+            // light-mode `.secondary` over a tinted-dark background was the
+            // failure mode this guards against). `Color.black` is opaque to
+            // give a fully predictable backdrop, and the inner view uses
+            // explicit white tones rather than `.primary`/`.secondary`.
             LockScreenHRView(context: context)
-                .activityBackgroundTint(Color.black.opacity(0.55))
+                .activityBackgroundTint(Color.black)
                 .activitySystemActionForegroundColor(.white)
         } dynamicIsland: { context in
             DynamicIsland {
@@ -32,7 +38,7 @@ struct HRMLiveActivity: Widget {
                 DynamicIslandExpandedRegion(.trailing) {
                     Text(context.attributes.sessionStartedAt, style: .timer)
                         .font(.title3.monospacedDigit())
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(Color.white.opacity(0.75))
                         .multilineTextAlignment(.trailing)
                         .frame(maxWidth: 64)
                 }
@@ -47,12 +53,14 @@ struct HRMLiveActivity: Widget {
                         contactBadge(context.state.sensorContact)
                     }
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Color.white.opacity(0.75))
                 }
             } compactLeading: {
                 Image(systemName: "heart.fill").foregroundStyle(.red)
             } compactTrailing: {
-                Text("\(context.state.bpm)").monospacedDigit()
+                Text("\(context.state.bpm)")
+                    .monospacedDigit()
+                    .foregroundStyle(.white)
             } minimal: {
                 Text("\(context.state.bpm)").monospacedDigit().foregroundStyle(.red)
             }
@@ -70,7 +78,9 @@ struct HRMLiveActivity: Widget {
     }
 }
 
-/// Lock-screen / banner presentation.
+/// Lock-screen / banner presentation. Foreground tones are explicit white
+/// shades (not `.primary`/`.secondary`) so the always-dark background tint
+/// can never resolve to dark-on-dark when the user is in light mode.
 struct LockScreenHRView: View {
     let context: ActivityViewContext<HRMActivityAttributes>
 
@@ -82,9 +92,10 @@ struct LockScreenHRView: View {
                 Text("\(context.state.bpm)")
                     .font(.system(size: 44, weight: .bold, design: .rounded))
                     .monospacedDigit()
+                    .foregroundStyle(.white)
                 Text("bpm")
                     .font(.headline)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Color.white.opacity(0.75))
                 Spacer()
                 VStack(alignment: .trailing, spacing: 2) {
                     Text("Recording")
@@ -92,7 +103,7 @@ struct LockScreenHRView: View {
                         .foregroundStyle(.red)
                     Text(context.attributes.sessionStartedAt, style: .timer)
                         .font(.title3.monospacedDigit())
-                        .foregroundStyle(.primary)
+                        .foregroundStyle(.white)
                         .multilineTextAlignment(.trailing)
                 }
             }
@@ -109,7 +120,7 @@ struct LockScreenHRView: View {
                 }
             }
             .font(.caption)
-            .foregroundStyle(.secondary)
+            .foregroundStyle(Color.white.opacity(0.75))
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 12)

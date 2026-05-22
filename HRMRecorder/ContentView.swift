@@ -8,6 +8,7 @@ struct ContentView: View {
     @State private var beat = false
     @State private var showDevicePicker = false
     @State private var deviceExpanded = false
+    @State private var confirmForgetAll = false
 
     private let tick = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
 
@@ -42,6 +43,18 @@ struct ContentView: View {
                 hr.select(device)          // additive — pick several; tap Done
             }
             .environmentObject(hr)
+        }
+        .alert("Remove all straps?", isPresented: $confirmForgetAll) {
+            Button(hr.isRecording ? "End Recording & Remove" : "Remove",
+                   role: .destructive) {
+                if hr.isRecording { hr.stopRecording() }
+                hr.forgetDevice()
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text(hr.isRecording
+                 ? "This stops the current recording and forgets every strap."
+                 : "This forgets every strap. You can pick them again next time.")
         }
     }
 
@@ -116,6 +129,14 @@ struct ContentView: View {
                             .fill(Self.color(for: d.state))
                             .frame(width: 7, height: 7)
                     }
+                    // Swipe-to-remove always safe here: secondaries by
+                    // definition aren't the primary, so removing one can
+                    // never empty the device list (primary still exists).
+                    .swipeActions(edge: .trailing) {
+                        Button(role: .destructive) {
+                            hr.forget(d.id)
+                        } label: { Label("Remove", systemImage: "minus.circle") }
+                    }
                 }
             }
         }
@@ -158,11 +179,14 @@ struct ContentView: View {
                 }
                 if hr.hasDevice {
                     Button(role: .destructive) {
-                        hr.forgetDevice()
+                        // During recording this is the "remove the last
+                        // strap(s)" path — the alert offers to end the
+                        // session as part of the action so the user isn't
+                        // forced to stop recording first.
+                        confirmForgetAll = true
                     } label: {
                         Label("Forget All Straps", systemImage: "minus.circle")
                     }
-                    .disabled(hr.isRecording)
                 }
             } label: {
                 LabeledContent(hr.devices.count > 1 ? "Straps" : "Strap") {
@@ -395,32 +419,75 @@ struct ShareSheet: UIViewControllerRepresentable {
 }
 
 /// Live list of nearby heart-rate straps; tap one to connect and remember it.
+/// Currently-connected straps appear in their own "Connected" section so the
+/// user can remove any strap (including the primary) mid-session.
 struct DevicePickerView: View {
     @EnvironmentObject private var hr: HeartRateManager
     @Environment(\.dismiss) private var dismiss
     let onSelect: (HeartRateManager.Device) -> Void
 
+    /// The strap UUID the user just asked to remove during a recording when
+    /// it would be the *last* one — held back until the alert resolves.
+    @State private var pendingLastStrapForget: UUID?
+
+    /// Stable ordering for the "Connected" section.
+    private var connectedDevices: [HeartRateManager.ConnectedDevice] {
+        hr.devices.values.sorted { $0.name < $1.name }
+    }
+
     var body: some View {
         NavigationStack {
             List {
+                if !connectedDevices.isEmpty {
+                    Section {
+                        ForEach(connectedDevices) { d in
+                            Button {
+                                requestForget(d.id)
+                            } label: {
+                                HStack {
+                                    Image(systemName: "checkmark.circle.fill")
+                                        .foregroundStyle(Color.green)
+                                    Text(d.name)
+                                        .foregroundStyle(.primary)
+                                    Spacer()
+                                    Circle()
+                                        .fill(Self.statusColor(for: d.state))
+                                        .frame(width: 7, height: 7)
+                                    Text(d.state.label)
+                                        .font(.caption2)
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
+                            .swipeActions(edge: .trailing) {
+                                Button(role: .destructive) {
+                                    requestForget(d.id)
+                                } label: { Label("Remove", systemImage: "minus.circle") }
+                            }
+                        }
+                    } header: {
+                        Text("Connected")
+                    } footer: {
+                        Text("Swipe (or tap) to remove a strap. If you remove the last strap during a recording, you'll be asked whether to end the session.")
+                    }
+                }
+
                 Section {
-                    if hr.discoveredDevices.isEmpty {
+                    let available = hr.discoveredDevices
+                        .filter { !hr.connectedDeviceIDs.contains($0.id) }
+                    if available.isEmpty {
                         HStack(spacing: 10) {
                             ProgressView()
                             Text("Searching for heart-rate straps…")
                                 .foregroundStyle(.secondary)
                         }
                     }
-                    ForEach(hr.discoveredDevices) { device in
-                        let isOn = hr.connectedDeviceIDs.contains(device.id)
+                    ForEach(available) { device in
                         Button {
-                            if isOn { hr.forget(device.id) } else { onSelect(device) }
+                            onSelect(device)
                         } label: {
                             HStack {
-                                Image(systemName: isOn
-                                      ? "checkmark.circle.fill"
-                                      : "sensor.tag.radiowaves.forward")
-                                    .foregroundStyle(isOn ? Color.green : Color.accentColor)
+                                Image(systemName: "sensor.tag.radiowaves.forward")
+                                    .foregroundStyle(Color.accentColor)
                                 Text(device.name)
                                     .foregroundStyle(.primary)
                                 Spacer()
@@ -432,8 +499,10 @@ struct DevicePickerView: View {
                             }
                         }
                     }
+                } header: {
+                    Text(connectedDevices.isEmpty ? "Available" : "Add another")
                 } footer: {
-                    Text("Tap a strap to connect it; tap a connected (✓) strap to disconnect it. Connect several different straps at once — to compare them, or as a backup if one drops mid-recording. Each strap (e.g. an HRM-Pro+) still allows only one connection to itself, so disconnect it from Garmin Connect / other apps first.")
+                    Text("Connect several different straps at once — to compare them, or as a backup if one drops mid-recording. Each strap (e.g. an HRM-Pro+) still allows only one connection to itself, so disconnect it from Garmin Connect / other apps first.")
                 }
             }
             .navigationTitle(hr.hasDevice ? "Straps" : "Choose Device")
@@ -448,6 +517,42 @@ struct DevicePickerView: View {
                     }
                 }
             }
+            .alert("Remove the last strap?",
+                   isPresented: Binding(
+                    get: { pendingLastStrapForget != nil },
+                    set: { if !$0 { pendingLastStrapForget = nil } })) {
+                Button("End Recording & Remove", role: .destructive) {
+                    if let id = pendingLastStrapForget {
+                        hr.stopRecording()
+                        hr.forget(id)
+                    }
+                    pendingLastStrapForget = nil
+                }
+                Button("Cancel", role: .cancel) {
+                    pendingLastStrapForget = nil
+                }
+            } message: {
+                Text("This is the only strap connected. Removing it ends the current recording.")
+            }
+        }
+    }
+
+    /// Forget a strap immediately unless doing so would leave the recording
+    /// with zero straps — in that case stash the id and let the alert above
+    /// confirm the user actually wants to end the session.
+    private func requestForget(_ id: UUID) {
+        if hr.isRecording && hr.devices.count <= 1 {
+            pendingLastStrapForget = id
+        } else {
+            hr.forget(id)
+        }
+    }
+
+    private static func statusColor(for state: HeartRateManager.State) -> Color {
+        switch state {
+        case .connected:              return .green
+        case .scanning, .connecting:  return .orange
+        default:                      return .red
         }
     }
 
