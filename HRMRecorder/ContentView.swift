@@ -95,6 +95,15 @@ struct ContentView: View {
                         .font(.caption)
                         .foregroundStyle(c ? .green : .orange)
                 }
+                // Only surface battery on the live screen when it's low —
+                // keeps the main screen uncluttered for the normal case
+                // (full battery info is always visible in the Device row).
+                if let pct = hr.batteryPercent, pct <= 20 {
+                    Label("Strap battery \(pct)%",
+                          systemImage: Self.batteryIcon(pct))
+                        .font(.caption)
+                        .foregroundStyle(Self.batteryColor(pct))
+                }
             }
             .frame(maxWidth: .infinity)
             .padding(.vertical, 8)
@@ -125,6 +134,13 @@ struct ContentView: View {
                             .font(.caption)
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
+                        if let pct = d.batteryPercent {
+                            Label("\(pct)%", systemImage: Self.batteryIcon(pct))
+                                .labelStyle(.titleAndIcon)
+                                .font(.caption2)
+                                .monospacedDigit()
+                                .foregroundStyle(Self.batteryColor(pct))
+                        }
                         Circle()
                             .fill(Self.color(for: d.state))
                             .frame(width: 7, height: 7)
@@ -150,6 +166,24 @@ struct ContentView: View {
         }
     }
 
+    /// SF Symbol bucket for a battery percent.
+    fileprivate static func batteryIcon(_ pct: Int) -> String {
+        switch pct {
+        case ...10:  return "battery.0percent"
+        case ...25:  return "battery.25percent"
+        case ...50:  return "battery.50percent"
+        case ...75:  return "battery.75percent"
+        default:     return "battery.100percent"
+        }
+    }
+
+    /// Tint: ≤10% red, ≤20% orange, otherwise default secondary.
+    fileprivate static func batteryColor(_ pct: Int) -> Color {
+        if pct <= 10 { return .red }
+        if pct <= 20 { return .orange }
+        return .secondary
+    }
+
     /// Collapsed-row summary: nothing / the strap name / "N straps".
     private var strapSummary: String {
         switch hr.devices.count {
@@ -169,6 +203,13 @@ struct ContentView: View {
                 }
                 if let fw = hr.firmware {
                     LabeledContent("Firmware", value: fw)
+                }
+                if let pct = hr.batteryPercent {
+                    LabeledContent("Battery") {
+                        Label("\(pct)%", systemImage: Self.batteryIcon(pct))
+                            .monospacedDigit()
+                            .foregroundStyle(Self.batteryColor(pct))
+                    }
                 }
                 Button {
                     hr.startDeviceScan()

@@ -50,6 +50,7 @@ struct HRMLiveActivity: Widget {
                             Text(extra).monospacedDigit()
                         }
                         Spacer()
+                        batteryBadge(context.state.lowestBatteryPercent)
                         contactBadge(context.state.sensorContact)
                     }
                     .font(.caption)
@@ -74,6 +75,15 @@ struct HRMLiveActivity: Widget {
             Label(contact ? "Contact OK" : "Poor contact",
                    systemImage: contact ? "checkmark.circle" : "exclamationmark.triangle")
                 .foregroundStyle(contact ? .green : .orange)
+        }
+    }
+
+    @ViewBuilder
+    fileprivate func batteryBadge(_ percent: Int?) -> some View {
+        if let pct = percent {
+            Label("\(pct)%", systemImage: batteryIconName(pct))
+                .foregroundStyle(batteryColor(pct))
+                .monospacedDigit()
         }
     }
 }
@@ -114,6 +124,11 @@ struct LockScreenHRView: View {
                     Text(extra).monospacedDigit()
                 }
                 Spacer()
+                if let pct = context.state.lowestBatteryPercent {
+                    Label("\(pct)%", systemImage: batteryIconName(pct))
+                        .foregroundStyle(batteryColor(pct))
+                        .monospacedDigit()
+                }
                 if let contact = context.state.sensorContact, !contact {
                     Label("Poor skin contact", systemImage: "exclamationmark.triangle")
                         .foregroundStyle(.orange)
@@ -133,4 +148,23 @@ struct LockScreenHRView: View {
 private func secondarySummary(_ bpms: [Int]?) -> String? {
     guard let bpms, !bpms.isEmpty else { return nil }
     return "+ " + bpms.map(String.init).joined(separator: " · ")
+}
+
+/// SF Symbol bucket for a battery percent.
+fileprivate func batteryIconName(_ pct: Int) -> String {
+    switch pct {
+    case ...10:  return "battery.0percent"
+    case ...25:  return "battery.25percent"
+    case ...50:  return "battery.50percent"
+    case ...75:  return "battery.75percent"
+    default:     return "battery.100percent"
+    }
+}
+
+/// Tint a strap battery percent. ≤10% red, ≤20% yellow; otherwise the
+/// activity's normal white-on-black tone.
+fileprivate func batteryColor(_ pct: Int) -> Color {
+    if pct <= 10 { return .red }
+    if pct <= 20 { return .yellow }
+    return Color.white.opacity(0.75)
 }

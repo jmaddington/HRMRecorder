@@ -38,7 +38,8 @@ final class LiveActivityController {
     private let significantBPMDelta = 5
 
     /// Begin a Live Activity for a freshly started recording session.
-    func start(deviceName: String, sessionStartedAt: Date, bpm: Int, contact: Bool?) {
+    func start(deviceName: String, sessionStartedAt: Date, bpm: Int,
+               contact: Bool?, lowestBatteryPercent: Int? = nil) {
         guard activity == nil else {
             log.notice("start: skipped, an activity is already running")
             return
@@ -54,7 +55,8 @@ final class LiveActivityController {
         let attributes = HRMActivityAttributes(sessionStartedAt: sessionStartedAt)
         let state = HRMActivityAttributes.ContentState(
             bpm: bpm, sensorContact: contact,
-            deviceName: deviceName, lastUpdate: Date())
+            deviceName: deviceName, lastUpdate: Date(),
+            lowestBatteryPercent: lowestBatteryPercent)
         do {
             let activity = try Activity.request(
                 attributes: attributes,
@@ -80,7 +82,9 @@ final class LiveActivityController {
     /// they ride along on whatever push the primary-driven throttle allows so
     /// N straps never multiply the background update budget (one activity,
     /// one throttle). Empty → byte-identical single-strap payload.
-    func update(bpm: Int, contact: Bool?, now: Date, secondaryBPMs: [Int] = []) {
+    func update(bpm: Int, contact: Bool?, now: Date,
+                secondaryBPMs: [Int] = [],
+                lowestBatteryPercent: Int? = nil) {
         guard let activity else { return }
         let dueByTime = now.timeIntervalSince(lastPushedAt) >= minInterval
         let bigSwing = abs(bpm - lastPushedBPM) >= significantBPMDelta
@@ -93,7 +97,8 @@ final class LiveActivityController {
         let state = HRMActivityAttributes.ContentState(
             bpm: bpm, sensorContact: contact,
             deviceName: deviceName, lastUpdate: now,
-            secondaryBPMs: secondaryBPMs.isEmpty ? nil : secondaryBPMs)
+            secondaryBPMs: secondaryBPMs.isEmpty ? nil : secondaryBPMs,
+            lowestBatteryPercent: lowestBatteryPercent)
         Task { await activity.update(ActivityContent(state: state, staleDate: nil)) }
     }
 
@@ -110,10 +115,12 @@ final class LiveActivityController {
     /// and request a fresh one for the same session. The user reaches this
     /// when the activity has hung or they swiped it away by accident and
     /// want it back without stopping the recording.
-    func restart(deviceName: String, sessionStartedAt: Date, bpm: Int, contact: Bool?) {
+    func restart(deviceName: String, sessionStartedAt: Date, bpm: Int,
+                 contact: Bool?, lowestBatteryPercent: Int? = nil) {
         end()
         start(deviceName: deviceName,
-              sessionStartedAt: sessionStartedAt, bpm: bpm, contact: contact)
+              sessionStartedAt: sessionStartedAt, bpm: bpm, contact: contact,
+              lowestBatteryPercent: lowestBatteryPercent)
     }
 
     /// After a process restart mid-session, re-attach to a still-running

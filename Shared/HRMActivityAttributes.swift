@@ -27,6 +27,11 @@ struct HRMActivityAttributes: ActivityAttributes {
         /// Optional so a single-strap payload is byte-identical to before
         /// (decodes fine against the old struct; nil → rendered as today).
         var secondaryBPMs: [Int]? = nil
+        /// Lowest battery percent across all connected straps (0–100),
+        /// surfaced on the lock screen so the user sees a low strap without
+        /// unlocking. Optional + defaulted so older activity payloads
+        /// decode fine and straps that don't expose battery render as today.
+        var lowestBatteryPercent: Int? = nil
     }
 
     /// Fixed for the activity's lifetime. Powers `Text(_, style: .timer)` in

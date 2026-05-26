@@ -64,6 +64,9 @@ final class HeartRateManager: NSObject, ObservableObject {
         var model: String?
         var firmware: String?
         var bodyLocation: String?
+        /// 0–100 from GATT 0x2A19, or nil when the strap doesn't expose
+        /// Battery Service (0x180F).
+        var batteryPercent: Int?
     }
 
     @Published private(set) var state: State = .disconnected
@@ -72,6 +75,9 @@ final class HeartRateManager: NSObject, ObservableObject {
     @Published private(set) var sensorContact: Bool?
     @Published private(set) var energyKJ: Int?
     @Published private(set) var lastUpdate: Date?
+
+    /// Mirror of `primaryDeviceID`'s battery (0–100), or nil when unknown.
+    @Published private(set) var batteryPercent: Int?
 
     /// Sensor identity, read from the Device Information Service (0x180A) and
     /// the HR service's Body Sensor Location characteristic on connect.
@@ -151,6 +157,8 @@ final class HeartRateManager: NSObject, ObservableObject {
     private let cManufacturer = CBUUID(string: "2A29")
     private let cModel = CBUUID(string: "2A24")
     private let cFirmware = CBUUID(string: "2A26")
+    private let batteryService = CBUUID(string: "180F")
+    private let batteryLevel = CBUUID(string: "2A19")
     /// Invoked once after a session is closed (cold path only — never the
     /// ~1 Hz `ingest()` path). `AppModel` wires this to `SyncUploader` so a
     /// finished recording opportunistically uploads. A nil/throwing sink
@@ -190,6 +198,16 @@ final class HeartRateManager: NSObject, ObservableObject {
     /// primary back to secondary when an old strap reconnects (avoids
     /// flap on a flaky monitor). Sort by name so the choice between two
     /// connected secondaries is deterministic.
+    /// Min battery across every connected strap that reports one, or nil
+    /// if none of the connected straps expose battery service. Feeds the
+    /// Live Activity so the lock screen can warn on the weakest strap.
+    private func lowestConnectedBattery() -> Int? {
+        devices.values
+            .filter { $0.state == .connected }
+            .compactMap { $0.batteryPercent }
+            .min()
+    }
+
     private func refreshPrimaryMirror() {
         let currentPrimary = primaryDeviceID.flatMap { devices[$0] }
         if currentPrimary == nil || currentPrimary?.state != .connected {
@@ -207,6 +225,7 @@ final class HeartRateManager: NSObject, ObservableObject {
             deviceName = "—"; heartRate = 0
             sensorContact = nil; energyKJ = nil; lastUpdate = nil
             manufacturer = nil; model = nil; firmware = nil; bodyLocation = nil
+            batteryPercent = nil
             return
         }
         deviceName = d.name
@@ -218,6 +237,7 @@ final class HeartRateManager: NSObject, ObservableObject {
         model = d.model
         firmware = d.firmware
         bodyLocation = d.bodyLocation
+        batteryPercent = d.batteryPercent
     }
 
     init(db: HRDatabase) {
@@ -248,7 +268,8 @@ final class HeartRateManager: NSObject, ObservableObject {
         if #available(iOS 16.2, *) {
             liveActivity.start(deviceName: liveActivityDeviceName,
                                sessionStartedAt: sessionStartedAt ?? Date(),
-                               bpm: heartRate, contact: sensorContact)
+                               bpm: heartRate, contact: sensorContact,
+                               lowestBatteryPercent: lowestConnectedBattery())
         } else {
             NSLog("[LiveActivity] iOS < 16.2 — Live Activity unavailable on this device")
         }
@@ -276,7 +297,8 @@ final class HeartRateManager: NSObject, ObservableObject {
         if #available(iOS 16.2, *) {
             liveActivity.restart(deviceName: liveActivityDeviceName,
                                  sessionStartedAt: startedAt,
-                                 bpm: heartRate, contact: sensorContact)
+                                 bpm: heartRate, contact: sensorContact,
+                                 lowestBatteryPercent: lowestConnectedBattery())
         }
     }
 
@@ -487,7 +509,7 @@ extension HeartRateManager: CBCentralManagerDelegate {
     func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) {
         devices[peripheral.identifier]?.name = peripheral.name ?? "Heart-Rate Strap"
         refreshPrimaryMirror()
-        peripheral.discoverServices([hrService, disService])
+        peripheral.discoverServices([hrService, disService, batteryService])
     }
 
     func centralManager(_ central: CBCentralManager,
@@ -538,6 +560,8 @@ extension HeartRateManager: CBPeripheralDelegate {
             case disService:
                 peripheral.discoverCharacteristics([cManufacturer, cModel, cFirmware],
                                                    for: service)
+            case batteryService:
+                peripheral.discoverCharacteristics([batteryLevel], for: service)
             default:
                 break
             }
@@ -561,6 +585,12 @@ extension HeartRateManager: CBPeripheralDelegate {
                 refreshPrimaryMirror()
             case bodySensorLocation, cManufacturer, cModel, cFirmware:
                 peripheral.readValue(for: ch)   // one-shot reads, identity is static
+            case batteryLevel:
+                // Read once for the initial value; subscribe for the strap's
+                // own pushed updates (battery rarely changes — notifications
+                // are sparse, no throttling needed).
+                peripheral.readValue(for: ch)
+                peripheral.setNotifyValue(true, for: ch)
             default:
                 break
             }
@@ -587,6 +617,11 @@ extension HeartRateManager: CBPeripheralDelegate {
         case bodySensorLocation:
             devices[id]?.bodyLocation = Self.bodyLocationName(data.first)
             refreshPrimaryMirror(); persistDeviceInfo()
+        case batteryLevel:
+            if let raw = data.first {
+                devices[id]?.batteryPercent = min(100, max(0, Int(raw)))
+                refreshPrimaryMirror()
+            }
         default:
             break
         }
@@ -671,7 +706,8 @@ extension HeartRateManager: CBPeripheralDelegate {
             if #available(iOS 16.2, *), devID == primaryDeviceID {
                 liveActivity.update(bpm: bpm, contact: contact, now: now,
                                     secondaryBPMs: secondaryDevices
-                                        .map(\.heartRate).filter { $0 > 0 })
+                                        .map(\.heartRate).filter { $0 > 0 },
+                                    lowestBatteryPercent: lowestConnectedBattery())
             }
         }
     }
