@@ -19,6 +19,12 @@ struct HRMRecorderApp: App {
             if phase == .background || phase == .active {
                 model.uploader.trigger("scenePhase:\(phase)")
             }
+            // Re-apply the screen-on policy on foreground in case the user
+            // toggled "Keep screen on" in another app (Settings.app pane)
+            // or another scene-phase transition cleared it.
+            if phase == .active {
+                model.hr.refreshIdleTimer()
+            }
         }
     }
 }
@@ -35,6 +41,7 @@ final class AppModel: ObservableObject {
 
     init() {
         SyncSettings.registerDefaults()
+        AppSettings.registerDefaults()
         hr = HeartRateManager(db: db)
         uploader = SyncUploader(db: db, auth: auth)
         // Push a finished recording opportunistically (cold path only).

@@ -343,6 +343,19 @@ struct SessionsView: View {
             }
 
             Section {
+                Toggle("Keep screen on while app is open", isOn: Binding(
+                    get: { AppSettings.keepScreenOnWhileAppOpen },
+                    set: { on in
+                        AppSettings.keepScreenOnWhileAppOpen = on
+                        model.hr.refreshIdleTimer()
+                    }))
+            } header: {
+                Text("Display")
+            } footer: {
+                Text("Keeps the display awake whenever the app is in the foreground; uses more battery.")
+            }
+
+            Section {
                 NavigationLink {
                     ServerSyncView()
                 } label: {

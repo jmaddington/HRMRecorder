@@ -252,7 +252,7 @@ final class HeartRateManager: NSObject, ObservableObject {
         } else {
             NSLog("[LiveActivity] iOS < 16.2 — Live Activity unavailable on this device")
         }
-        UIApplication.shared.isIdleTimerDisabled = true   // keep screen awake in foreground
+        refreshIdleTimer()                                // keep screen awake while recording
     }
 
     func stopRecording() {
@@ -263,8 +263,17 @@ final class HeartRateManager: NSObject, ObservableObject {
         if #available(iOS 16.2, *) { liveActivity.end() }
         sessionID = nil
         sessionStartedAt = nil
-        UIApplication.shared.isIdleTimerDisabled = false
+        refreshIdleTimer()
         onSessionClosed?()   // opportunistic sync (cold path; best-effort)
+    }
+
+    /// Idle-timer policy: hold the screen awake while recording OR while
+    /// the user has the "Keep screen on" setting on. Re-apply on
+    /// start/stop, on session resume, when the toggle changes, and on
+    /// scenePhase `.active`.
+    func refreshIdleTimer() {
+        UIApplication.shared.isIdleTimerDisabled =
+            isRecording || AppSettings.keepScreenOnWhileAppOpen
     }
 
     /// Restore an interrupted session after a process restart so capture
@@ -284,7 +293,7 @@ final class HeartRateManager: NSObject, ObservableObject {
                                sessionStartedAt: s.startedAt,
                                bpm: heartRate, contact: sensorContact)
         }
-        UIApplication.shared.isIdleTimerDisabled = true
+        refreshIdleTimer()
     }
 
     // MARK: - Device selection
