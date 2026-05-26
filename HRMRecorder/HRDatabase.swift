@@ -514,6 +514,52 @@ final class HRDatabase {
         }
     }
 
+    /// Deletes every ended session whose samples are all ≤ `uploadedThroughID`
+    /// (i.e. confirmed on the server), excluding `activeSessionID` if given.
+    /// Sync cursor is not touched — subsequent uploads continue from where
+    /// they left off. Returns the number of sessions deleted. Synchronous so
+    /// the UI can surface the count.
+    @discardableResult
+    func deleteFullySyncedSessions(uploadedThroughID: Int,
+                                   excluding activeSessionID: String?) -> Int {
+        queue.sync {
+            // 1) Collect candidate session ids inside one logical pass.
+            var ids: [String] = []
+            var stmt: OpaquePointer?
+            let sql = """
+                SELECT s.id FROM sessions s
+                WHERE s.ended_at IS NOT NULL
+                  AND s.id != IFNULL(?, '')
+                  AND NOT EXISTS (
+                        SELECT 1 FROM samples x
+                        WHERE x.session_id = s.id AND x.id > ?);
+                """
+            if sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK {
+                if let active = activeSessionID {
+                    sqlite3_bind_text(stmt, 1, active, -1, SQLITE_TRANSIENT)
+                } else {
+                    sqlite3_bind_null(stmt, 1)
+                }
+                sqlite3_bind_int64(stmt, 2, sqlite3_int64(uploadedThroughID))
+                while sqlite3_step(stmt) == SQLITE_ROW {
+                    ids.append(String(cString: sqlite3_column_text(stmt, 0)))
+                }
+            }
+            sqlite3_finalize(stmt)
+            guard !ids.isEmpty else { return 0 }
+
+            // 2) Delete in one transaction. Per-id binds keep this safe
+            //    regardless of how many sessions match.
+            exec("BEGIN;")
+            for id in ids {
+                run("DELETE FROM samples WHERE session_id = ?;", text: id)
+                run("DELETE FROM sessions WHERE id = ?;", text: id)
+            }
+            exec("COMMIT;")
+            return ids.count
+        }
+    }
+
     // MARK: - CSV export
 
     /// Streams matching rows into a CSV file in the temp directory and returns

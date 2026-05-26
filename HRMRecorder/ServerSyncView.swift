@@ -15,6 +15,8 @@ struct ServerSyncView: View {
     @State private var testResult = ""
     @State private var signingIn = false
     @State private var pending = 0
+    @State private var confirmingDelete = false
+    @State private var deleteResult = ""
 
     private var serverURL: String { SyncSettings.serverURLString }
     private var urlIsValidHTTPS: Bool { SyncSettings.validatedBaseURL != nil }
@@ -108,12 +110,39 @@ struct ServerSyncView: View {
             } header: {
                 Text("Status")
             } footer: {
-                Text("Sync is best-effort and never deletes local data. A failed sync never affects recording.")
+                Text("Sync is best-effort and runs automatically. A failed sync never affects recording. Local data is only deleted when you tap “Delete synced sessions” below.")
+            }
+
+            Section {
+                Button(role: .destructive) {
+                    confirmingDelete = true
+                } label: {
+                    Label("Delete synced sessions", systemImage: "trash")
+                }
+                if !deleteResult.isEmpty {
+                    Text(deleteResult)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            } header: {
+                Text("Local storage")
+            } footer: {
+                Text("Removes ended sessions whose samples are all confirmed on the server. The current recording is never touched, and the server keeps its copy. Once deleted, those sessions can no longer be exported to CSV from this device.")
             }
         }
         .navigationTitle("Server Sync")
         .listStyle(.insetGrouped)
         .onAppear { refresh() }
+        .confirmationDialog("Delete synced sessions from this device?",
+                            isPresented: $confirmingDelete,
+                            titleVisibility: .visible) {
+            Button("Delete synced sessions", role: .destructive) {
+                deleteSyncedSessions()
+            }
+            Button("Cancel", role: .cancel) { }
+        } message: {
+            Text("Only sessions whose samples are all confirmed on the server will be removed. The current recording and any not-yet-synced sessions are kept.")
+        }
     }
 
     private func refresh() {
@@ -136,6 +165,17 @@ struct ServerSyncView: View {
             refresh()
             if enabled { uploader.trigger("after-signin") }
         }
+    }
+
+    private func deleteSyncedSessions() {
+        let cursor = SyncSettings.cursorSampleID
+        let active = model.hr.activeSessionID
+        let n = model.db.deleteFullySyncedSessions(uploadedThroughID: cursor,
+                                                   excluding: active)
+        deleteResult = n == 0
+            ? "Nothing to delete — no sessions are fully synced."
+            : "Deleted \(n) session\(n == 1 ? "" : "s")."
+        refresh()
     }
 
     private func testConnection() {

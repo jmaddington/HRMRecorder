@@ -123,6 +123,10 @@ final class HeartRateManager: NSObject, ObservableObject {
     private var central: CBCentralManager!
     private var sessionID: String?
 
+    /// The session currently being recorded into, or nil if not recording.
+    /// Exposed so the "delete synced sessions" cleanup can exclude it.
+    var activeSessionID: String? { sessionID }
+
     /// Lock-screen / Dynamic Island Live Activity, alive only while recording.
     /// Best-effort glanceable UI — its failures never affect capture.
     private let liveActivity = LiveActivityController()
