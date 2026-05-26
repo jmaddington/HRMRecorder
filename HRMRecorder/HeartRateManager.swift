@@ -267,6 +267,19 @@ final class HeartRateManager: NSObject, ObservableObject {
         onSessionClosed?()   // opportunistic sync (cold path; best-effort)
     }
 
+    /// Re-summon the Live Activity for the in-progress session. Used when
+    /// the user has swiped the activity away or it has hung. No-op if not
+    /// recording. BLE capture, the DB session, and the sync cursor are
+    /// untouched.
+    func restartLiveActivity() {
+        guard isRecording, let startedAt = sessionStartedAt else { return }
+        if #available(iOS 16.2, *) {
+            liveActivity.restart(deviceName: liveActivityDeviceName,
+                                 sessionStartedAt: startedAt,
+                                 bpm: heartRate, contact: sensorContact)
+        }
+    }
+
     /// Idle-timer policy: hold the screen awake while recording OR while
     /// the user has the "Keep screen on" setting on. Re-apply on
     /// start/stop, on session resume, when the toggle changes, and on

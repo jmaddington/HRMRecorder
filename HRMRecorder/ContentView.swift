@@ -266,6 +266,7 @@ struct ContentView: View {
 /// whole-database export/delete actions.
 struct SessionsView: View {
     @EnvironmentObject private var model: AppModel
+    @EnvironmentObject private var hr: HeartRateManager
 
     @State private var sessions: [HRDatabase.SessionInfo] = []
     @State private var shareURL: URL?
@@ -339,6 +340,20 @@ struct SessionsView: View {
             } footer: {
                 if limitRange {
                     Text("Exports whole calendar days, inclusive of both dates. If no samples fall in the range, no file is produced.")
+                }
+            }
+
+            if hr.isRecording {
+                Section {
+                    Button {
+                        hr.restartLiveActivity()
+                    } label: {
+                        Label("Restart Live Activity", systemImage: "arrow.clockwise.circle")
+                    }
+                } header: {
+                    Text("Live Activity")
+                } footer: {
+                    Text("If the lock-screen activity has hung or you swiped it away, use this to re-summon it for the current session. Recording is not interrupted.")
                 }
             }
 

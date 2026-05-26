@@ -106,6 +106,16 @@ final class LiveActivityController {
         Task { await activity.end(nil, dismissalPolicy: .immediate) }
     }
 
+    /// User-initiated relaunch: tear down the current activity (if any)
+    /// and request a fresh one for the same session. The user reaches this
+    /// when the activity has hung or they swiped it away by accident and
+    /// want it back without stopping the recording.
+    func restart(deviceName: String, sessionStartedAt: Date, bpm: Int, contact: Bool?) {
+        end()
+        start(deviceName: deviceName,
+              sessionStartedAt: sessionStartedAt, bpm: bpm, contact: contact)
+    }
+
     /// After a process restart mid-session, re-attach to a still-running
     /// activity if iOS kept one alive; otherwise start a fresh one.
     func adopt(deviceName: String, sessionStartedAt: Date, bpm: Int, contact: Bool?) {
