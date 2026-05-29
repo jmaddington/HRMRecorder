@@ -31,3 +31,6 @@ HRMRecorder [0-9]*/
 
 # Exported personal heart-rate data left in the repo root
 HRM_*.csv
+
+# Claude Code transient scheduler lock
+.claude/scheduled_tasks.lock
