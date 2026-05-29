@@ -119,6 +119,13 @@ final class HeartRateManager: NSObject, ObservableObject {
     @Published private(set) var sessionStartedAt: Date?
     @Published private(set) var sessionSampleCount = 0
 
+    /// Captured samples since the last sync nudge. Crossing
+    /// `syncSampleThreshold` fires `onSampleThreshold` so a long continuous
+    /// recording pushes periodically without waiting for a background/stop
+    /// event. In-memory only — an int compare on the hot path, never a DB read.
+    private var samplesSinceSyncTrigger = 0
+    private let syncSampleThreshold = 1000
+
     /// All connected/connecting straps, keyed by peripheral UUID. The scalar
     /// `@Published` properties mirror `primaryDeviceID`'s entry so single-strap
     /// UI is unchanged; secondary straps surface in the multi-strap UI (P3).
@@ -164,6 +171,13 @@ final class HeartRateManager: NSObject, ObservableObject {
     /// finished recording opportunistically uploads. A nil/throwing sink
     /// must never affect recording.
     var onSessionClosed: (() -> Void)?
+
+    /// Invoked from `ingest()` once `syncSampleThreshold` samples have been
+    /// captured since the last nudge (counter reset on each fire). `AppModel`
+    /// wires this to `SyncUploader.trigger`, which is non-blocking and runs the
+    /// upload off this path — so this stays a cheap int compare on the hot
+    /// path. A nil/throwing sink must never affect recording.
+    var onSampleThreshold: (() -> Void)?
 
     private let preferredDeviceKey = "preferredDeviceUUID"      // legacy single
     private let preferredDevicesKey = "preferredDeviceUUIDs"    // set of UUIDs
@@ -703,6 +717,11 @@ extension HeartRateManager: CBPeripheralDelegate {
                             rr: rr, contact: contact, energyKJ: energy,
                             deviceID: devID.uuidString)
             sessionSampleCount += 1
+            samplesSinceSyncTrigger += 1
+            if samplesSinceSyncTrigger >= syncSampleThreshold {
+                samplesSinceSyncTrigger = 0
+                onSampleThreshold?()                       // non-blocking nudge
+            }
             if #available(iOS 16.2, *), devID == primaryDeviceID {
                 liveActivity.update(bpm: bpm, contact: contact, now: now,
                                     secondaryBPMs: secondaryDevices

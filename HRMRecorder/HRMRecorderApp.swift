@@ -46,5 +46,9 @@ final class AppModel: ObservableObject {
         uploader = SyncUploader(db: db, auth: auth)
         // Push a finished recording opportunistically (cold path only).
         hr.onSessionClosed = { [uploader] in uploader.trigger("stopRecording") }
+        // Nudge a sync every ~1000 captured samples so a long continuous
+        // recording doesn't accumulate unsynced data between background/stop
+        // events. trigger() is non-blocking and a no-op unless sync is enabled.
+        hr.onSampleThreshold = { [uploader] in uploader.trigger("sampleThreshold") }
     }
 }

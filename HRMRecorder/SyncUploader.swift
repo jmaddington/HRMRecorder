@@ -4,8 +4,10 @@ import Foundation
 ///
 /// Best-effort, opportunistic, cancellable. One default `URLSession` (not a
 /// background session — minimal footprint, this is the last app you'd kill).
-/// Triggered only off the *cold* paths (`stopRecording`, scene background/
-/// active, a backoff retry) — **never** from the ~1 Hz `ingest()` hot path.
+/// Triggered off the *cold* paths (`stopRecording`, scene background/active, a
+/// backoff retry, manual) and once every ~1000 captured samples. The sample
+/// trigger fires from `ingest()` but only on every 1000th sample (~16 min at
+/// 1 Hz) and `trigger()` is non-blocking, so the ~1 Hz hot path stays clear.
 ///
 /// Hard invariant (CLAUDE.md): every network/HTTP/auth error is caught and
 /// recorded in `SyncSettings.lastResult`; recording, the SQLite DB and the
