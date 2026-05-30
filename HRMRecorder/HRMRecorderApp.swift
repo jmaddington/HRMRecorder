@@ -7,7 +7,7 @@ struct HRMRecorderApp: App {
 
     var body: some Scene {
         WindowGroup {
-            ContentView()
+            rootView
                 .environmentObject(model.hr)
                 .environmentObject(model)
                 .environmentObject(model.uploader)
@@ -26,6 +26,26 @@ struct HRMRecorderApp: App {
                 model.hr.refreshIdleTimer()
             }
         }
+    }
+
+    // AIDEV-NOTE: DEBUG-only screenshot root-swap. Launch args drive the app
+    // to open directly on a target screen so marketing screenshots are
+    // deterministic and re-shootable without coordinate-guessing UI taps.
+    // Release builds always render the normal ContentView.
+    @ViewBuilder
+    private var rootView: some View {
+        #if DEBUG
+        let args = ProcessInfo.processInfo.arguments
+        if args.contains("-HRMScreenshotSessions") {
+            NavigationStack { SessionsView() }
+        } else if args.contains("-HRMScreenshotPicker") {
+            DevicePickerView(onSelect: { _ in })
+        } else {
+            ContentView()
+        }
+        #else
+        ContentView()
+        #endif
     }
 }
 
