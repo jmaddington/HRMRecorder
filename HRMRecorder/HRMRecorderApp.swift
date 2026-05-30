@@ -65,6 +65,21 @@ final class AppModel: ObservableObject {
         #if DEBUG
         // Idempotent fixture seeding; no-op without launch arg -HRMSeedFakeSessions.
         SessionFixtures.seedIfRequested(into: db)
+        // Verification helper for HRMRecorder-dc5: runs the real exportCSV
+        // path against current DB contents and copies the file to
+        // Documents/ so it's reachable via simctl get_app_container.
+        if ProcessInfo.processInfo.arguments.contains("-HRMExportCSVOnLaunch") {
+            if let src = db.exportCSV(sessionID: nil),
+               let docs = try? FileManager.default.url(for: .documentDirectory,
+                                                       in: .userDomainMask,
+                                                       appropriateFor: nil,
+                                                       create: true) {
+                let dst = docs.appendingPathComponent("HRM_export_verification.csv")
+                try? FileManager.default.removeItem(at: dst)
+                try? FileManager.default.copyItem(at: src, to: dst)
+                NSLog("[HRMRecorder] Exported CSV to \(dst.path) [DC5-EXPORT-VERIFY]")
+            }
+        }
         #endif
         hr = HeartRateManager(db: db)
         uploader = SyncUploader(db: db, auth: auth)
