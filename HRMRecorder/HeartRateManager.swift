@@ -52,8 +52,9 @@ final class HeartRateManager: NSObject, ObservableObject {
     /// the scalar `@Published` properties below mirror whichever is `primary`
     /// so existing single-strap UI binds unchanged.
     struct ConnectedDevice: Identifiable {
-        let id: UUID                       // CBPeripheral.identifier
-        var peripheral: CBPeripheral
+        let id: UUID                       // CBPeripheral.identifier, or a synthesized UUID for DEBUG fake straps
+        // AIDEV-NOTE: optional so a DEBUG-only synthetic strap can occupy a slot without a CBPeripheral.
+        var peripheral: CBPeripheral?
         var name: String
         var state: State = .connecting
         var heartRate = 0
@@ -265,7 +266,64 @@ final class HeartRateManager: NSObject, ObservableObject {
                 CBCentralManagerOptionRestoreIdentifierKey: "HRMRecorderCentral",
                 CBCentralManagerOptionShowPowerAlertKey: true
             ])
+        #if DEBUG
+        startSyntheticSensorIfRequested()
+        #endif
     }
+
+    #if DEBUG
+    // AIDEV-NOTE: Simulator-only synthetic strap. Gated by launch arg
+    // -HRMUseFakeSensor (Edit Scheme → Run → Arguments). The whole block
+    // is #if DEBUG so it cannot ship in Release. Primary use case: exercise
+    // the UI in iOS Simulator (CoreBluetooth doesn't function there) for
+    // marketing screenshots.
+    private var syntheticSource: SyntheticHRSource?
+
+    private func startSyntheticSensorIfRequested() {
+        let args = ProcessInfo.processInfo.arguments
+        guard args.contains("-HRMUseFakeSensor") else { return }
+        let source = SyntheticHRSource(manager: self)
+        syntheticSource = source
+        source.start()
+    }
+
+    /// Install a fake strap into the connected-devices map so the rest of
+    /// the UI sees it like a real one. Called once by the synthetic source.
+    func installSyntheticStrap(id: UUID, name: String,
+                               manufacturer: String, model: String,
+                               firmware: String, bodyLocation: String,
+                               batteryPercent: Int) {
+        var d = ConnectedDevice(id: id, peripheral: nil, name: name)
+        d.state = .connected
+        d.manufacturer = manufacturer
+        d.model = model
+        d.firmware = firmware
+        d.bodyLocation = bodyLocation
+        d.batteryPercent = batteryPercent
+        devices[id] = d
+        if primaryDeviceID == nil { primaryDeviceID = id }
+        state = .connected
+        refreshPrimaryMirror()
+        // Mirror the identity onto the devices table so per-sample
+        // attribution + CSV export look complete.
+        db.setDevice(id: id.uuidString, name: name,
+                     manufacturer: manufacturer, model: model,
+                     firmware: firmware, bodyLocation: bodyLocation)
+    }
+
+    /// Inject one synthetic 1 Hz sample from the fake strap. Wraps `record`.
+    /// AIDEV-NOTE: self-heals state because the CB delegate on Simulator
+    /// transitions to .unsupported → downgrades global state to .disconnected.
+    /// Reasserting on every tick keeps the connection pill green.
+    func injectSyntheticSample(strapID: UUID, bpm: Int, rr: [Int]) {
+        if devices[strapID]?.state != .connected {
+            devices[strapID]?.state = .connected
+        }
+        if state != .connected { state = .connected }
+        record(strapID: strapID, bpm: bpm, contact: true,
+               energyKJ: nil, rr: rr, at: Date())
+    }
+    #endif
 
     // MARK: - Recording control
 
@@ -373,7 +431,7 @@ final class HeartRateManager: NSObject, ObservableObject {
 
     /// Drop one strap: disconnect it, stop remembering it, and remove it.
     func forget(_ id: UUID) {
-        if let d = devices[id] { central.cancelPeripheralConnection(d.peripheral) }
+        if let p = devices[id]?.peripheral { central.cancelPeripheralConnection(p) }
         devices[id] = nil
         if primaryDeviceID == id { primaryDeviceID = nil }
         preferredDeviceIDs.remove(id.uuidString)
@@ -383,7 +441,7 @@ final class HeartRateManager: NSObject, ObservableObject {
     /// Drop all saved straps and go back to picking one.
     func forgetDevice() {
         preferredDeviceIDs = []
-        for d in devices.values { central.cancelPeripheralConnection(d.peripheral) }
+        for p in devices.values.compactMap(\.peripheral) { central.cancelPeripheralConnection(p) }
         devices = [:]
         primaryDeviceID = nil
         refreshPrimaryMirror()      // resets scalars (deviceName → "—")
@@ -398,7 +456,7 @@ final class HeartRateManager: NSObject, ObservableObject {
         guard central.state == .poweredOn else { return }
 
         // Reconnect every peripheral the system restored to us (not just one).
-        for p in devices.values.map(\.peripheral) { connect(p) }
+        for p in devices.values.compactMap(\.peripheral) { connect(p) }
 
         let remembered = Set(preferredDeviceIDs.compactMap(UUID.init(uuidString:)))
         var pending = remembered.subtracting(devices.keys)
@@ -698,12 +756,20 @@ extension HeartRateManager: CBPeripheralDelegate {
             }
         }
 
-        let now = Date()
-        let devID = peripheral.identifier
+        record(strapID: peripheral.identifier, bpm: bpm, contact: contact,
+               energyKJ: energy, rr: rr, at: Date())
+    }
+
+    /// Common tail shared by the real BLE ingest path and the DEBUG synthetic
+    /// source: update the source strap's `ConnectedDevice` entry, write the
+    /// sample to the DB if a session is open, and nudge the Live Activity.
+    /// Keep this lean — it runs on the ~1 Hz capture hot path.
+    private func record(strapID devID: UUID, bpm: Int, contact: Bool?,
+                        energyKJ: Int?, rr: [Int], at now: Date) {
         if devices[devID] != nil {
             devices[devID]!.heartRate = bpm
             devices[devID]!.sensorContact = contact
-            devices[devID]!.energyKJ = energy
+            devices[devID]!.energyKJ = energyKJ
             devices[devID]!.lastUpdate = now
         }
         refreshPrimaryMirror()
@@ -714,7 +780,7 @@ extension HeartRateManager: CBPeripheralDelegate {
             // output is unchanged: export COALESCEs the devices row over the
             // session row to the same identity (first 12 cols byte-identical).
             db.insertSample(sessionID: sid, date: now, bpm: bpm,
-                            rr: rr, contact: contact, energyKJ: energy,
+                            rr: rr, contact: contact, energyKJ: energyKJ,
                             deviceID: devID.uuidString)
             sessionSampleCount += 1
             samplesSinceSyncTrigger += 1
