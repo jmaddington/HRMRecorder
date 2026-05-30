@@ -216,68 +216,45 @@ p.subhead {
   width: 100%;
   height: 100%;
   border-radius: 36px;
-  background: linear-gradient(160deg, #1c1c1e 0%, #0b0b0d 70%);
-  color: #f5f5f7;
-  padding: 60px 22px 22px;
+  background: #f5f5f7;
   display: flex;
-  flex-direction: column;
-  align-items: center;
-  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", sans-serif;
   position: relative;
   overflow: hidden;
 }
-.phone-screen .status {
-  font-size: 12px;
-  color: #8e8e93;
-  margin-bottom: 8px;
-}
-.phone-screen .bpm-label {
-  font-size: 13px;
-  text-transform: uppercase;
-  letter-spacing: 0.1em;
-  color: #8e8e93;
-  margin-top: 24px;
-}
-.phone-screen .bpm {
-  font-size: 96px;
-  font-weight: 700;
-  letter-spacing: -0.04em;
-  line-height: 1;
-  color: var(--accent);
-  margin: 6px 0 2px;
-  animation: pulse 1.05s ease-in-out infinite;
-}
-@keyframes pulse {
-  0%, 100% { transform: scale(1); }
-  20% { transform: scale(1.04); }
-  40% { transform: scale(1); }
-}
-.phone-screen .bpm-unit { color: #8e8e93; font-size: 14px; letter-spacing: 0.1em; }
-.phone-screen .rr {
-  margin-top: 22px;
-  font-size: 12px;
-  color: #8e8e93;
-  font-variant-numeric: tabular-nums;
-  text-align: center;
-  line-height: 1.5;
-}
-.phone-screen .rr span { color: #f5f5f7; }
-.phone-screen .record-btn {
-  margin-top: auto;
-  background: var(--accent);
-  color: white;
-  border-radius: 999px;
-  padding: 14px 0;
+.phone-screen img {
   width: 100%;
-  text-align: center;
-  font-size: 15px;
-  font-weight: 600;
+  height: 100%;
+  object-fit: cover;
+  display: block;
 }
-.phone-screen .strap {
-  margin-top: 14px;
-  font-size: 11px;
-  color: #6e6e73;
-  letter-spacing: 0.04em;
+
+/* ---------- Screenshot gallery ---------- */
+
+.gallery {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: clamp(20px, 3vw, 40px);
+  align-items: end;
+  margin-top: clamp(40px, 6vw, 70px);
+}
+.gallery .phone {
+  width: 100%;
+  max-width: 300px;
+  margin: 0 auto;
+}
+.gallery figure { margin: 0; text-align: center; }
+.gallery figcaption {
+  margin-top: 18px;
+  font-size: 15px;
+  color: var(--text-dim);
+  letter-spacing: -0.005em;
+}
+.gallery figcaption strong {
+  display: block;
+  color: var(--text);
+  font-weight: 600;
+  font-size: 16px;
+  margin-bottom: 2px;
 }
 
 /* ---------- Audiences ---------- */

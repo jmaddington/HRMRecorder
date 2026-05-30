@@ -19,7 +19,7 @@
 
 <!-- AIDEV-TODO: remove this draft banner (and the matching one in privacy.html) before publishing. Search for "draft-banner" in style.css to also remove the related styles. -->
 <div class="draft-banner">
-  DRAFT — not yet live. Placeholders pending: <code>{{APP_STORE_URL}}</code> and <code>hello@example.com</code>.
+  DRAFT — App Store link (<code>{{APP_STORE_URL}}</code>) and support email (<code>hello@example.com</code>) still pending.
 </div>
 
 <nav class="nav">
@@ -28,6 +28,7 @@
     <div class="links">
       <a href="#who">Who it's for</a>
       <a href="#features">Features</a>
+      <a href="#screens">Screens</a>
       <a href="#faq">FAQ</a>
       <a href="privacy.html">Privacy</a>
       <a href="https://github.com/jmaddington/HRMRecorder">GitHub</a>
@@ -56,18 +57,11 @@
   <p class="cta-note">Free · Open source · Requires a BLE heart-rate strap</p>
 
   <div class="phone-wrap">
-    <div class="phone" aria-hidden="true">
+    <div class="phone">
       <div class="phone-screen">
-        <div class="status">Recording · 00:42:17</div>
-        <div class="bpm-label">Heart Rate</div>
-        <div class="bpm">68</div>
-        <div class="bpm-unit">BPM</div>
-        <div class="rr">
-          R-R intervals (ms)<br />
-          <span>872 · 891 · 884 · 868 · 902</span>
-        </div>
-        <div class="record-btn">Stop Recording</div>
-        <div class="strap">Garmin HRM-Pro+ · Chest</div>
+        <img src="screenshots/recording.png"
+             alt="HRM Recorder mid-session: 66 BPM, elapsed 0:00:04, 5 samples saved, Stop Recording button, Simulator Strap connected."
+             width="1206" height="2622" />
       </div>
     </div>
   </div>
@@ -191,6 +185,42 @@
         <h4>Optional self-hosted sync</h4>
         <p>Want a backup? Point it at your own server. No service to sign up for; no third party between you and your data.</p>
       </div>
+    </div>
+  </div>
+</section>
+
+<!-- SCREENSHOT GALLERY -->
+<section id="screens">
+  <div class="wrap">
+    <div class="section-eyebrow center">In the app</div>
+    <h2 class="section-h center">Everything you see is the data.</h2>
+    <p class="section-sub center">
+      No marketing dashboards or motivational rings. Just the heart rate,
+      the strap, the session, the export. (Screenshots taken in the iOS
+      Simulator with synthetic data.)
+    </p>
+
+    <div class="gallery">
+      <figure>
+        <div class="phone"><div class="phone-screen">
+          <img src="screenshots/home.png" alt="Home screen: live BPM, connected strap, Start Recording button." width="1206" height="2622" />
+        </div></div>
+        <figcaption><strong>Live BPM</strong>One screen. The number that matters.</figcaption>
+      </figure>
+
+      <figure>
+        <div class="phone"><div class="phone-screen">
+          <img src="screenshots/sessions.png" alt="Sessions list with seven recorded sessions and an Export All as CSV button." width="1206" height="2622" />
+        </div></div>
+        <figcaption><strong>Sessions</strong>Every recording. Export all, or one.</figcaption>
+      </figure>
+
+      <figure>
+        <div class="phone"><div class="phone-screen">
+          <img src="screenshots/picker.png" alt="Strap picker showing a connected strap and searching for more." width="1206" height="2622" />
+        </div></div>
+        <figcaption><strong>Multi-strap</strong>Pair one, or several at once.</figcaption>
+      </figure>
     </div>
   </div>
 </section>
