@@ -739,3 +739,118 @@ extension ISO8601DateFormatter {
         return f
     }()
 }
+
+#if DEBUG
+// AIDEV-NOTE: Fixture seeding helpers — only compiled into Debug. Used by
+// SessionFixtures.swift behind the -HRMSeedFakeSessions launch arg so the
+// sessions list / CSV-export views have realistic data for screenshots.
+extension HRDatabase {
+
+    /// True if a session row with this id already exists. Used to keep the
+    /// fixture seeder idempotent across app restarts.
+    func sessionExists(id: String) -> Bool {
+        queue.sync {
+            var stmt: OpaquePointer?
+            var found = false
+            if sqlite3_prepare_v2(db,
+                "SELECT 1 FROM sessions WHERE id = ? LIMIT 1;",
+                -1, &stmt, nil) == SQLITE_OK {
+                sqlite3_bind_text(stmt, 1, id, -1, SQLITE_TRANSIENT)
+                found = sqlite3_step(stmt) == SQLITE_ROW
+            }
+            sqlite3_finalize(stmt)
+            return found
+        }
+    }
+
+    /// Insert a complete historical session row with caller-supplied
+    /// timestamps and identity. The normal `startSession` always stamps
+    /// `Date()`; fixtures need backdated `started_at` / `ended_at`.
+    func seedSession(id: String, startedAt: Date, endedAt: Date,
+                     deviceName: String?, manufacturer: String?,
+                     model: String?, firmware: String?, bodyLocation: String?) {
+        queue.sync {
+            var stmt: OpaquePointer?
+            let sql = """
+                INSERT OR IGNORE INTO sessions
+                    (id, started_at, ended_at, device_name,
+                     manufacturer, model, firmware, body_location)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?);
+                """
+            if sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK {
+                sqlite3_bind_text(stmt, 1, id, -1, SQLITE_TRANSIENT)
+                sqlite3_bind_double(stmt, 2, startedAt.timeIntervalSince1970)
+                sqlite3_bind_double(stmt, 3, endedAt.timeIntervalSince1970)
+                let bind: (Int32, String?) -> Void = { idx, value in
+                    if let v = value {
+                        sqlite3_bind_text(stmt, idx, v, -1, SQLITE_TRANSIENT)
+                    } else {
+                        sqlite3_bind_null(stmt, idx)
+                    }
+                }
+                bind(4, deviceName)
+                bind(5, manufacturer)
+                bind(6, model)
+                bind(7, firmware)
+                bind(8, bodyLocation)
+                sqlite3_step(stmt)
+            }
+            sqlite3_finalize(stmt)
+        }
+    }
+
+    /// Bulk-insert fixture samples in one transaction. Avoid for production
+    /// capture — the real path uses fire-and-forget `insertSample` so it
+    /// never blocks the 1 Hz ingest. This is fixture-only and runs `sync`.
+    struct FixtureSample {
+        let sessionID: String
+        let ts: Date
+        let bpm: Int
+        let rr: [Int]
+        let contact: Bool?
+        let deviceID: String?
+    }
+
+    func seedSamples(_ samples: [FixtureSample]) {
+        guard !samples.isEmpty else { return }
+        queue.sync {
+            sqlite3_exec(db, "BEGIN;", nil, nil, nil)
+            var stmt: OpaquePointer?
+            let sql = """
+                INSERT INTO samples
+                    (session_id, ts, bpm, rr_ms, contact, energy_kj, device_id)
+                VALUES (?, ?, ?, ?, ?, NULL, ?);
+                """
+            if sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK {
+                for s in samples {
+                    sqlite3_reset(stmt)
+                    sqlite3_clear_bindings(stmt)
+                    sqlite3_bind_text(stmt, 1, s.sessionID, -1, SQLITE_TRANSIENT)
+                    sqlite3_bind_double(stmt, 2, s.ts.timeIntervalSince1970)
+                    sqlite3_bind_int(stmt, 3, Int32(s.bpm))
+                    if s.rr.isEmpty {
+                        sqlite3_bind_null(stmt, 4)
+                    } else {
+                        sqlite3_bind_text(stmt, 4,
+                            s.rr.map(String.init).joined(separator: ";"),
+                            -1, SQLITE_TRANSIENT)
+                    }
+                    if let c = s.contact {
+                        sqlite3_bind_int(stmt, 5, c ? 1 : 0)
+                    } else {
+                        sqlite3_bind_null(stmt, 5)
+                    }
+                    if let dev = s.deviceID {
+                        sqlite3_bind_text(stmt, 6, dev, -1, SQLITE_TRANSIENT)
+                    } else {
+                        sqlite3_bind_null(stmt, 6)
+                    }
+                    sqlite3_step(stmt)
+                }
+            }
+            sqlite3_finalize(stmt)
+            sqlite3_exec(db, "COMMIT;", nil, nil, nil)
+        }
+    }
+}
+#endif

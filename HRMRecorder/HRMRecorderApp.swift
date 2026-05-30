@@ -42,6 +42,10 @@ final class AppModel: ObservableObject {
     init() {
         SyncSettings.registerDefaults()
         AppSettings.registerDefaults()
+        #if DEBUG
+        // Idempotent fixture seeding; no-op without launch arg -HRMSeedFakeSessions.
+        SessionFixtures.seedIfRequested(into: db)
+        #endif
         hr = HeartRateManager(db: db)
         uploader = SyncUploader(db: db, auth: auth)
         // Push a finished recording opportunistically (cold path only).
