@@ -85,6 +85,17 @@ final class AppModel: ObservableObject {
         uploader = SyncUploader(db: db, auth: auth)
         // Push a finished recording opportunistically (cold path only).
         hr.onSessionClosed = { [uploader] in uploader.trigger("stopRecording") }
+        #if DEBUG
+        // Verification helper for HRMRecorder-9fo and screenshot capture:
+        // auto-starts recording 1.5s after launch (gives the synthetic source
+        // time to feed at least one sample so the session is non-empty).
+        if ProcessInfo.processInfo.arguments.contains("-HRMAutoRecord") {
+            let weakHR = hr
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak weakHR] in
+                weakHR?.startRecording()
+            }
+        }
+        #endif
         // Nudge a sync every ~1000 captured samples so a long continuous
         // recording doesn't accumulate unsynced data between background/stop
         // events. trigger() is non-blocking and a no-op unless sync is enabled.

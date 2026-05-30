@@ -3,6 +3,7 @@ import SwiftUI
 struct ContentView: View {
     @EnvironmentObject private var hr: HeartRateManager
     @EnvironmentObject private var model: AppModel
+    @Environment(\.verticalSizeClass) private var verticalSizeClass
 
     @State private var now = Date()
     @State private var beat = false
@@ -14,26 +15,14 @@ struct ContentView: View {
 
     var body: some View {
         NavigationStack {
-            List {
-                liveSection
-                otherStrapsSection
-                recordSection
-                deviceSection
-                Section {
-                    NavigationLink {
-                        SessionsView()
-                    } label: {
-                        Label("Sessions", systemImage: "list.bullet.rectangle")
-                    }
-                } footer: {
-                    Text(Self.versionString)
-                        .font(.caption2)
-                        .foregroundStyle(.tertiary)
-                        .frame(maxWidth: .infinity, alignment: .center)
+            Group {
+                if verticalSizeClass == .compact {
+                    twoColumnLayout
+                } else {
+                    singleColumnLayout
                 }
             }
             .navigationTitle("HRM Recorder")
-            .listStyle(.insetGrouped)
         }
         .onAppear { maybePresentPicker() }
         .onReceive(tick) { now = $0 }
@@ -58,56 +47,125 @@ struct ContentView: View {
         }
     }
 
+    // MARK: - Layout variants
+
+    // AIDEV-NOTE: Portrait stacks every section in one List (the historical
+    // shape). Landscape (verticalSizeClass == .compact) splits into two side-
+    // by-side Lists so the wide horizontal area is actually useful: the
+    // live-BPM card stays dominant on the left while Recording / Device /
+    // Sessions controls live on the right column. Both columns use the same
+    // .insetGrouped styling so cards look identical regardless of orientation.
+
+    private var singleColumnLayout: some View {
+        List {
+            liveSection
+            otherStrapsSection
+            recordSection
+            deviceSection
+            sessionsLinkSection
+        }
+        .listStyle(.insetGrouped)
+    }
+
+    private var twoColumnLayout: some View {
+        HStack(spacing: 0) {
+            List {
+                liveSection
+                otherStrapsSection
+            }
+            .listStyle(.insetGrouped)
+            .frame(maxWidth: .infinity)
+
+            Divider()
+
+            List {
+                recordSection
+                deviceSection
+                sessionsLinkSection
+            }
+            .listStyle(.insetGrouped)
+            .frame(maxWidth: .infinity)
+        }
+    }
+
+    private var sessionsLinkSection: some View {
+        Section {
+            NavigationLink {
+                SessionsView()
+            } label: {
+                Label("Sessions", systemImage: "list.bullet.rectangle")
+            }
+        } footer: {
+            Text(Self.versionString)
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+                .frame(maxWidth: .infinity, alignment: .center)
+        }
+    }
+
     // MARK: - Live heart rate
 
     private var liveSection: some View {
         Section {
             VStack(spacing: 8) {
-                HStack(alignment: .firstTextBaseline, spacing: 6) {
-                    Image(systemName: "heart.fill")
-                        .foregroundStyle(.red)
-                        .scaleEffect(beat ? 1.18 : 1.0)
-                        .animation(hr.heartRate > 0
-                                   ? .easeInOut(duration: 0.45).repeatForever(autoreverses: true)
-                                   : .default,
-                                   value: beat)
-                        .onAppear { beat = true }
-                    Text(hr.heartRate > 0 ? "\(hr.heartRate)" : "—")
-                        .font(.system(size: 72, weight: .bold, design: .rounded))
-                        .monospacedDigit()
-                        .contentTransition(.numericText())
-                    Text("bpm").font(.title3).foregroundStyle(.secondary)
-                }
-                HStack(spacing: 6) {
-                    Circle()
-                        .fill(statusColor)
-                        .frame(width: 9, height: 9)
-                    Text(hr.state.label)
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                }
+                bpmDisplay
+                statusRow
                 Text(hr.deviceName)
                     .font(.footnote)
                     .foregroundStyle(.tertiary)
-                if let c = hr.sensorContact {
-                    Label(c ? "Skin contact OK" : "Poor skin contact",
-                          systemImage: c ? "checkmark.circle" : "exclamationmark.triangle")
-                        .font(.caption)
-                        .foregroundStyle(c ? .green : .orange)
-                }
+                if let c = hr.sensorContact { contactLabel(c) }
                 // Only surface battery on the live screen when it's low —
                 // keeps the main screen uncluttered for the normal case
                 // (full battery info is always visible in the Device row).
                 if let pct = hr.batteryPercent, pct <= 20 {
-                    Label("Strap battery \(pct)%",
-                          systemImage: Self.batteryIcon(pct))
-                        .font(.caption)
-                        .foregroundStyle(Self.batteryColor(pct))
+                    lowBatteryLabel(pct)
                 }
             }
             .frame(maxWidth: .infinity)
             .padding(.vertical, 8)
         }
+    }
+
+    private var bpmDisplay: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
+            Image(systemName: "heart.fill")
+                .foregroundStyle(.red)
+                .scaleEffect(beat ? 1.18 : 1.0)
+                .animation(hr.heartRate > 0
+                           ? .easeInOut(duration: 0.45).repeatForever(autoreverses: true)
+                           : .default,
+                           value: beat)
+                .onAppear { beat = true }
+            Text(hr.heartRate > 0 ? "\(hr.heartRate)" : "—")
+                .font(.system(size: 72, weight: .bold, design: .rounded))
+                .monospacedDigit()
+                .contentTransition(.numericText())
+            Text("bpm").font(.title3).foregroundStyle(.secondary)
+        }
+    }
+
+    private var statusRow: some View {
+        HStack(spacing: 6) {
+            Circle()
+                .fill(statusColor)
+                .frame(width: 9, height: 9)
+            Text(hr.state.label)
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private func contactLabel(_ ok: Bool) -> some View {
+        Label(ok ? "Skin contact OK" : "Poor skin contact",
+              systemImage: ok ? "checkmark.circle" : "exclamationmark.triangle")
+            .font(.caption)
+            .foregroundStyle(ok ? .green : .orange)
+    }
+
+    private func lowBatteryLabel(_ pct: Int) -> some View {
+        Label("Strap battery \(pct)%", systemImage: Self.batteryIcon(pct))
+            .font(.caption)
+            .foregroundStyle(Self.batteryColor(pct))
     }
 
     // MARK: - Other straps
