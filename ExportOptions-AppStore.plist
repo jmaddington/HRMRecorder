@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- App Store / TestFlight distribution. -->
+	<key>method</key>
+	<string>app-store</string>
+	<key>teamID</key>
+	<string>9922U2YSY3</string>
+	<key>signingStyle</key>
+	<string>automatic</string>
+	<!-- Produce an .ipa locally rather than uploading directly. -->
+	<key>destination</key>
+	<string>export</string>
+	<!-- Upload dSYMs so TestFlight/App Store can symbolicate crash reports. -->
+	<key>uploadSymbols</key>
+	<true/>
+	<!-- Let Xcode strip bitcode if present (no-op for current toolchains). -->
+	<key>stripSwiftSymbols</key>
+	<true/>
+</dict>
+</plist>
