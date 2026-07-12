@@ -4,6 +4,10 @@
   --text: #1d1d1f;
   --text-dim: #6e6e73;
   --accent: #ff2d2d;
+  /* AIDEV-NOTE: --accent-text = brand red darkened to >=4.5:1 on --bg, --bg-alt
+     AND --accent-soft (5.34/4.91/4.51). Small accent text must use it; #ff2d2d
+     is reserved for large text (hero span, stat numerals) where 3:1 passes. */
+  --accent-text: #cf2424;
   --accent-soft: #ffe6e6;
   --border: rgba(0, 0, 0, 0.08);
   --shadow: 0 30px 60px -20px rgba(0, 0, 0, 0.18);
@@ -19,6 +23,7 @@
     --text: #f5f5f7;
     --text-dim: #a1a1a6;
     --accent: #ff453a;
+    --accent-text: #ff453a; /* passes 6.16/5.53/5.28 on dark bgs — no split needed */
     --accent-soft: #2a0e0e;
     --border: rgba(255, 255, 255, 0.1);
     --shadow: 0 30px 80px -20px rgba(255, 45, 58, 0.25);
@@ -41,33 +46,10 @@ html, body {
 }
 
 a {
-  color: var(--accent);
+  color: var(--accent-text);
   text-decoration: none;
 }
 a:hover { text-decoration: underline; }
-
-/* ---------- Draft banner (AIDEV-TODO: remove before publishing) ---------- */
-
-.draft-banner {
-  position: sticky;
-  top: 0;
-  z-index: 20;
-  background: #ffb800;
-  color: #1d1d1f;
-  text-align: center;
-  font-size: 13px;
-  font-weight: 600;
-  letter-spacing: 0.02em;
-  padding: 8px 16px;
-  border-bottom: 1px solid rgba(0, 0, 0, 0.15);
-}
-.draft-banner code {
-  background: rgba(0, 0, 0, 0.12);
-  padding: 1px 6px;
-  border-radius: 4px;
-  font-size: 12px;
-}
-.draft-banner + .nav { top: 33px; }
 
 /* ---------- Layout ---------- */
 
@@ -111,6 +93,18 @@ section + section { border-top: 1px solid var(--border); }
 .nav .links a { color: var(--text-dim); }
 .nav .links a:hover { color: var(--text); text-decoration: none; }
 
+/* AIDEV-NOTE: nav must survive a 390px viewport with 7 links — wrap, don't overflow. */
+@media (max-width: 700px) {
+  .nav .wrap {
+    height: auto;
+    flex-wrap: wrap;
+    padding-top: 10px;
+    padding-bottom: 10px;
+    row-gap: 4px;
+  }
+  .nav .links { flex-wrap: wrap; gap: 6px 14px; }
+}
+
 /* ---------- Hero ---------- */
 
 .hero {
@@ -125,7 +119,7 @@ section + section { border-top: 1px solid var(--border); }
   font-weight: 600;
   letter-spacing: 0.04em;
   text-transform: uppercase;
-  color: var(--accent);
+  color: var(--accent-text);
   padding: 6px 14px;
   border-radius: 999px;
   background: var(--accent-soft);
@@ -172,10 +166,15 @@ p.subhead {
   border: 1px solid transparent;
 }
 .btn.primary {
-  background: var(--accent);
+  background: var(--accent-text); /* AA for the white 17px label (5.34:1 light) */
   color: white;
 }
 .btn.primary:hover { transform: translateY(-1px); text-decoration: none; }
+/* AIDEV-NOTE: dark --accent-text fails as a button FILL (white label 3.41:1); keep #cf2424 (5.34:1).
+   Must stay AFTER .btn.primary in source order or the cascade reverts it. */
+@media (prefers-color-scheme: dark) {
+  .btn.primary { background: #cf2424; }
+}
 .btn.ghost {
   background: transparent;
   color: var(--text);
@@ -264,7 +263,7 @@ p.subhead {
   font-weight: 600;
   letter-spacing: 0.06em;
   text-transform: uppercase;
-  color: var(--accent);
+  color: var(--accent-text);
   margin-bottom: 14px;
 }
 .section-h {
@@ -329,7 +328,7 @@ p.subhead {
   border-radius: var(--radius);
   background: var(--bg-alt);
 }
-.feature h4 {
+.feature h3 {
   font-size: 18px;
   letter-spacing: -0.015em;
   margin: 0 0 8px;
@@ -492,7 +491,115 @@ footer .links a:hover { color: var(--text); text-decoration: none; }
   line-height: 1.5;
 }
 
+/* ---------- Tables (comparison strip + docs) ---------- */
+
+/* AIDEV-NOTE: .table-scroll keeps wide tables from breaking the page on phones. */
+.table-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+
+.table-scroll table {
+  width: 100%;
+  min-width: 640px;
+  border-collapse: collapse;
+  font-size: 15px;
+  line-height: 1.5;
+}
+.table-scroll th, .table-scroll td {
+  text-align: left;
+  vertical-align: top;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border);
+}
+.table-scroll th {
+  font-weight: 600;
+  color: var(--text);
+  letter-spacing: -0.005em;
+}
+.table-scroll td { color: var(--text-dim); }
+.table-scroll td:first-child, .table-scroll tbody th {
+  color: var(--text);
+  font-weight: 500;
+}
+
+/* Comparison table: middle column is us — quiet tint, full-contrast text. */
+.compare td:nth-child(3), .compare th:nth-child(3) {
+  background: var(--accent-soft);
+}
+.compare td:nth-child(3) { color: var(--text); }
+.compare-note {
+  max-width: 720px;
+  margin: 28px auto 0;
+  font-size: 14px;
+  color: var(--text-dim);
+  text-align: center;
+}
+
+/* ---------- Docs ---------- */
+
+/* Inline code + code blocks. Colors derive from the theme variables so both
+   light and dark schemes stay readable without a separate palette. */
+code {
+  font-family: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.88em;
+  background: var(--bg-alt);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 1px 6px;
+}
+pre {
+  background: var(--bg-alt);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 18px 20px;
+  overflow-x: auto;
+  font-size: 13.5px;
+  line-height: 1.55;
+}
+pre code {
+  background: none;
+  border: none;
+  padding: 0;
+  font-size: inherit;
+}
+
+/* Docs prose: reuse .prose, slightly wider for tables and code. */
+.prose.docs { max-width: 820px; }
+.prose.docs h3 {
+  font-size: clamp(19px, 2.2vw, 22px);
+  letter-spacing: -0.015em;
+  margin: 36px 0 10px;
+}
+.prose .table-scroll table { min-width: 560px; }
+.prose .table-scroll { margin: 16px 0 24px; }
+
+/* Endpoint heading: METHOD path in a pill-ish monospace lockup. */
+.endpoint {
+  display: inline-block;
+  font-family: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 15px;
+  font-weight: 600;
+  background: var(--accent-soft);
+  color: var(--accent-text);
+  border-radius: 8px;
+  padding: 4px 10px;
+}
+
+/* Breadcrumb-ish subtitle under docs H1s. */
+.doc-meta {
+  color: var(--text-dim);
+  font-size: 14px;
+  margin-bottom: 40px;
+}
+
 /* ---------- Utilities ---------- */
 
 .center { text-align: center; }
 .muted { color: var(--text-dim); }
+.visually-hidden {
+  position: absolute;
+  width: 1px; height: 1px;
+  margin: -1px; padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}

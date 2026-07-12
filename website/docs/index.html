@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Docs — HRM Recorder</title>
+  <meta name="description" content="HRM Recorder documentation: getting started, CSV export format, where your data lives, and self-hosted server sync." />
+  <meta name="theme-color" content="#ff2d2d" media="(prefers-color-scheme: light)" />
+  <meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)" />
+  <link rel="stylesheet" href="../style.css" />
+</head>
+<body>
+
+<nav class="nav">
+  <div class="wrap">
+    <a class="brand" href="../index.html">HRM Recorder</a>
+    <div class="links">
+      <a href="index.html">Docs</a>
+      <a href="api.html">API</a>
+      <a href="flask-example.html">Flask example</a>
+      <a href="../privacy.html">Privacy</a>
+      <a href="https://github.com/jmaddington/HRMRecorder">GitHub</a>
+    </div>
+  </div>
+</nav>
+
+<section>
+  <div class="wrap">
+    <article class="prose docs">
+      <h1>Docs.</h1>
+      <p class="doc-meta">
+        How the app records, what the export contains, where your data lives,
+        and how to receive it on a server you run.
+      </p>
+
+      <h2>Getting started</h2>
+      <ol>
+        <li>
+          <strong>Pair a strap.</strong> Wear any Bluetooth heart-rate sensor
+          that speaks the standard Heart Rate Service (<code>0x180D</code>) —
+          Garmin HRM-Pro+, Polar H10, Wahoo TICKR, and most chest straps.
+          Open the app, allow Bluetooth, and pick your strap from the list.
+          The app remembers it and reconnects automatically from then on.
+        </li>
+        <li>
+          <strong>Record.</strong> Tap <em>Start Recording</em>. Every
+          reading the strap sends — about one per second — is written to
+          disk immediately. Recording continues with the screen off and the
+          app in the background; if the strap drops out, the session resumes
+          when it reconnects.
+        </li>
+        <li>
+          <strong>Export.</strong> Export one session, or everything, as CSV
+          from the sessions list. The file opens in the iOS share sheet —
+          save to Files, AirDrop it, mail it.
+        </li>
+      </ol>
+
+      <h2>The CSV format</h2>
+      <p>
+        One row per reading from the strap — roughly one per second, and a
+        single row can carry several R-R intervals. Text fields are RFC-4180
+        quoted, so the file opens cleanly in Excel, Numbers, pandas, and R.
+        Columns, in order:
+      </p>
+      <div class="table-scroll">
+        <table>
+          <caption class="visually-hidden">CSV export columns and their meanings</caption>
+          <thead>
+            <tr><th scope="col">Column</th><th scope="col">Meaning</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><code>timestamp_iso</code></td><td>Sample time as an ISO-8601 string.</td></tr>
+            <tr><td><code>unix_seconds</code></td><td>Sample time as Unix epoch seconds, with sub-second precision — the authoritative timestamp.</td></tr>
+            <tr><td><code>session_id</code></td><td>The recording session this sample belongs to.</td></tr>
+            <tr><td><code>device_name</code>, <code>manufacturer</code>, <code>model</code>, <code>firmware</code>, <code>body_location</code></td><td>Sensor identity, denormalized onto every row so each CSV is self-describing. Resolved from the per-sample strap when known, falling back to the session's primary strap.</td></tr>
+            <tr><td><code>bpm</code></td><td>Heart rate reported by the strap, beats per minute.</td></tr>
+            <tr><td><code>rr_ms</code></td><td>R-R intervals in <strong>milliseconds, semicolon-joined</strong> (e.g. <code>"812;806"</code>) — one Bluetooth packet can carry several intervals. The cell is double-quoted so the embedded <code>;</code> stays one cell even in locales that use <code>;</code> as the list separator. Empty if the strap didn't send R-R data.</td></tr>
+            <tr><td><code>sensor_contact</code></td><td>Skin-contact status: <code>1</code> good, <code>0</code> poor, blank when the strap doesn't report it.</td></tr>
+            <tr><td><code>energy_kj</code></td><td>Energy expended in kilojoules, when the strap reports it.</td></tr>
+            <tr><td><code>device_id</code></td><td>Bluetooth UUID of the strap that produced this specific reading — sessions can span multiple straps. Blank for rows recorded before multi-strap support.</td></tr>
+            <tr><td><code>device_strap_name</code></td><td>Advertised name of that per-sample strap.</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h2>Where your data lives</h2>
+      <p>
+        Everything is stored on your device in a single SQLite file inside
+        the app's sandbox: <code>Application Support/hrm.sqlite3</code> (the
+        path is shown at the bottom of the app). WAL mode is enabled so
+        writes are durable in real time. The full schema —
+        <code>sessions</code>, <code>samples</code>, <code>devices</code> —
+        is published in the
+        <a href="https://github.com/jmaddington/HRMRecorder/blob/main/README.md">repository README</a>,
+        so you can bring your own tools to the raw database, not just the CSV.
+      </p>
+
+      <h2>Self-hosted server sync</h2>
+      <p>
+        Optionally, the app can push everything it records to a server —
+        <em>your</em> server. There is no hosted service and no default
+        destination: hosting other people's health data carries obligations
+        we'd rather not meet halfway, so the app ships tools instead — an
+        open protocol and working example code. You point it at a base URL
+        you control, and it uploads devices, sessions, and every sample,
+        incrementally and idempotently.
+      </p>
+      <ul>
+        <li><strong>HTTPS only.</strong> The app refuses plain <code>http://</code> base URLs, no exceptions.</li>
+        <li><strong>Auth is your choice.</strong> A static Bearer token you paste into the app's settings, or full OAuth 2.1 with PKCE if your server advertises it. Tokens live in the iOS Keychain.</li>
+        <li><strong>Safe to re-send.</strong> The protocol is idempotent and resumable — crashes, reinstalls, and flaky networks never duplicate or corrupt data, and sync never deletes anything local.</li>
+      </ul>
+      <p>Start here:</p>
+      <ul>
+        <li><a href="api.html">API reference</a> — the complete Protocol v1 contract: endpoints, resources, auth, error handling.</li>
+        <li><a href="flask-example.html">Flask example</a> — an annotated, minimal receiver you can download and run.</li>
+        <li><a href="https://github.com/jmaddington/HRMRecorder/blob/main/docs/SYNC_PROTOCOL.md">Protocol spec</a> and <a href="https://github.com/jmaddington/HRMRecorder/blob/main/docs/mock_server.py">reference mock server</a> (stdlib-only, with <code>--selftest</code>) in the repository.</li>
+      </ul>
+    </article>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <div>© <span id="year">2026</span> HRM Recorder · iPhone app</div>
+    <div class="links">
+      <a href="https://github.com/jmaddington/HRMRecorder">GitHub</a>
+      <a href="index.html">Docs</a>
+      <a href="../privacy.html">Privacy</a>
+      <a href="mailto:jonathan@jonathanaddington.com">Contact</a>
+    </div>
+  </div>
+</footer>
+
+<script>
+  document.getElementById('year').textContent = new Date().getFullYear();
+</script>
+
+</body>
+</html>

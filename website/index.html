@@ -12,24 +12,26 @@
   <meta property="og:title" content="HRM Recorder" />
   <meta property="og:description" content="Every heartbeat, every R-R interval. Recorded on your iPhone. Yours to keep." />
   <meta property="og:type" content="website" />
+  <meta property="og:url" content="https://jmaddington.github.io/HRMRecorder/" />
+  <meta property="og:image" content="https://jmaddington.github.io/HRMRecorder/og-card.png" />
+  <meta property="og:image:width" content="1200" />
+  <meta property="og:image:height" content="630" />
+  <meta property="og:image:alt" content="HRM Recorder — every heartbeat, every R-R interval, yours. iPhone app screenshot showing 66 BPM while recording." />
+  <link rel="canonical" href="https://jmaddington.github.io/HRMRecorder/" />
 
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
 
-<!-- AIDEV-TODO: remove this draft banner (and the matching one in privacy.html) before publishing. Search for "draft-banner" in style.css to also remove the related styles. -->
-<div class="draft-banner">
-  DRAFT — App Store link (<code>{{APP_STORE_URL}}</code>) and support email (<code>hello@example.com</code>) still pending.
-</div>
-
 <nav class="nav">
   <div class="wrap">
-    <a class="brand" href="/">HRM Recorder</a>
+    <a class="brand" href="index.html">HRM Recorder</a>
     <div class="links">
       <a href="#who">Who it's for</a>
       <a href="#features">Features</a>
       <a href="#screens">Screens</a>
       <a href="#faq">FAQ</a>
+      <a href="docs/index.html">Docs</a>
       <a href="privacy.html">Privacy</a>
       <a href="https://github.com/jmaddington/HRMRecorder">GitHub</a>
     </div>
@@ -45,13 +47,13 @@
     Yours.
   </h1>
   <p class="subhead">
-    Pair a Bluetooth heart-rate strap. Record every beat to your iPhone in real time.
-    Export to CSV. No accounts, no cloud, no third-party SDKs.
+    Pair a Bluetooth heart-rate strap. Record every beat to your iPhone in
+    real time — for hours, days, or months. Export to CSV. No accounts, no
+    cloud, no third-party SDKs.
   </p>
 
   <div class="cta-row">
-    <!-- AIDEV-TODO: replace {{APP_STORE_URL}} with the live App Store listing once published. -->
-    <a class="btn primary" href="{{APP_STORE_URL}}">Download on the App Store</a>
+    <a class="btn primary" href="https://apps.apple.com/app/id6770766954">Download on the App Store</a>
     <a class="btn ghost" href="#who">Is it for me?</a>
   </div>
   <p class="cta-note">Free · Open source · Requires a BLE heart-rate strap</p>
@@ -81,6 +83,19 @@
     <div class="audiences">
       <div class="audience">
         <div class="glyph" aria-hidden="true">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 12 7 12 10 4 14 20 17 12 21 12"/></svg>
+        </div>
+        <h3>Living with POTS, tachycardia, or dysautonomia</h3>
+        <p>
+          Symptoms that don't show up on demand in a 20-minute appointment.
+          The standing spikes, the racing episodes at 3 a.m., the slow drifts
+          between clinic visits — captured as they happen, in data your doctor
+          can actually look at.
+        </p>
+      </div>
+
+      <div class="audience">
+        <div class="glyph" aria-hidden="true">
           <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>
         </div>
         <h3>Health-curious humans</h3>
@@ -93,7 +108,7 @@
 
       <div class="audience">
         <div class="glyph" aria-hidden="true">
-          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 12 7 12 10 4 14 20 17 12 21 12"/></svg>
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/></svg>
         </div>
         <h3>Athletes tracking recovery</h3>
         <p>
@@ -102,19 +117,78 @@
           summary-only black box. No watch-vendor lock-in.
         </p>
       </div>
-
-      <div class="audience">
-        <div class="glyph" aria-hidden="true">
-          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/></svg>
-        </div>
-        <h3>Living with dysautonomia or POTS</h3>
-        <p>
-          Captures the spikes and the slow drifts that show up between Holter
-          monitors and clinic visits. Long-form data your doctor can actually
-          look at — without strapping electrodes to your chest for 48 hours.
-        </p>
-      </div>
     </div>
+  </div>
+</section>
+
+<!-- COMPARISON: watch vs strap+app vs Holter -->
+<!-- AIDEV-NOTE: keep this table scrupulously fair — Holter wins on rhythm by design; never say "medical-grade". -->
+<section id="compare">
+  <div class="wrap">
+    <div class="section-eyebrow center">Where it fits</div>
+    <h2 class="section-h center">Between a watch and a Holter.</h2>
+    <p class="section-sub center">
+      A watch is easy but coarse. A Holter sees everything — but you get it
+      for a day or two, and symptoms don't schedule themselves around
+      appointments. A chest strap with HRM Recorder sits in between: months
+      of beat-by-beat heart-rate data for the price of the strap and a couple
+      of coin cells.
+    </p>
+
+    <div class="table-scroll">
+      <table class="compare">
+        <caption class="visually-hidden">Comparison of a smartwatch, HRM Recorder with a chest strap, and a Holter monitor</caption>
+        <thead>
+          <tr>
+            <th scope="col"><span class="visually-hidden">Aspect</span></th>
+            <th scope="col">Smartwatch</th>
+            <th scope="col">HRM Recorder + chest strap</th>
+            <th scope="col">Holter monitor</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <th scope="row">What it reads</th>
+            <td>Optical — blood flow at the wrist</td>
+            <td>Electrical — the heart's own signal, the same signal an ECG reads</td>
+            <td>Electrical — full multi-lead ECG waveform</td>
+          </tr>
+          <tr>
+            <th scope="row">What you keep</th>
+            <td>Averaged heart rate and summary charts; raw export varies by vendor</td>
+            <td>Every sample, about one per second, with R-R intervals — as CSV and SQLite you own</td>
+            <td>A clinical report, interpreted by a cardiologist</td>
+          </tr>
+          <tr>
+            <th scope="row">Rhythm analysis</th>
+            <td>No — though some watches spot-check for AFib</td>
+            <td>No. Rate and beat timing only; it cannot see the waveform shapes that diagnose arrhythmias</td>
+            <td>Yes — this is exactly what it's for</td>
+          </tr>
+          <tr>
+            <th scope="row">How long you can record</th>
+            <td>Continuously, at watch-grade granularity</td>
+            <td>As long as you keep wearing the strap — weeks, months</td>
+            <td>Usually 24–48 hours per study</td>
+          </tr>
+          <tr>
+            <th scope="row">Rough cost</th>
+            <td>$200–800</td>
+            <td>Free app, a strap (about $50–90), and CR2032 batteries</td>
+            <td>Varies with insurance; typically hundreds per study, plus referral and scheduling</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p class="compare-note">
+      To be clear: if your doctor suspects an arrhythmia, a Holter or event
+      monitor is the right tool, and nothing here replaces it. What chest
+      straps are good at is beat timing — published validation against a
+      clinical ECG Holter found chest-strap R-R intervals agree closely with
+      the ECG (<a href="https://doi.org/10.1007/s00421-019-04142-5">Gilgen-Ammann
+      et&nbsp;al., 2019, Eur&nbsp;J&nbsp;Appl&nbsp;Physiol</a>).
+    </p>
   </div>
 </section>
 
@@ -150,40 +224,40 @@
 
     <div class="features">
       <div class="feature">
-        <h4>Standard BLE straps</h4>
+        <h3>Standard BLE straps</h3>
         <p>Works with any sensor exposing the standard Heart Rate Service. Garmin HRM-Pro+, Polar H10, Wahoo TICKR, COROS, and more.</p>
       </div>
       <div class="feature">
-        <h4>R-R intervals captured</h4>
+        <h3>R-R intervals captured</h3>
         <p>Every R-R interval the strap reports is written to your database — the data HRV analysis actually needs.</p>
       </div>
       <div class="feature">
-        <h4>Background recording</h4>
+        <h3>Background recording</h3>
         <p>Keeps recording with the screen off and the app backgrounded. If iOS suspends the app, it resumes the session when your strap reconnects.</p>
       </div>
       <div class="feature">
-        <h4>Live Activity</h4>
-        <p>Glance at live BPM from your Lock Screen and Dynamic Island, no need to open the app.</p>
+        <h3>Live Activity</h3>
+        <p>Glance at live BPM from your Lock Screen and Dynamic Island, no need to open the app. (iOS 16.1+)</p>
       </div>
       <div class="feature">
-        <h4>Multi-strap aware</h4>
+        <h3>Multi-strap aware</h3>
         <p>Swap straps mid-session, or record from two at once. Each sample is attributed to the strap that produced it.</p>
       </div>
       <div class="feature">
-        <h4>Real CSV export</h4>
-        <p>One row per heartbeat, with timestamp, BPM, R-R intervals, sensor identity. RFC-4180 quoted. Opens cleanly in Excel, Numbers, pandas, anything.</p>
+        <h3>Real CSV export</h3>
+        <p>One row per strap reading, about one per second — timestamp, BPM, R-R intervals, sensor identity. RFC-4180 quoted. Opens cleanly in Excel, Numbers, pandas, anything.</p>
       </div>
       <div class="feature">
-        <h4>Local SQLite</h4>
+        <h3>Local SQLite</h3>
         <p>Data lives in a single SQLite file in the app sandbox. WAL mode for durable real-time writes. Schema is published — bring your own tools.</p>
       </div>
       <div class="feature">
-        <h4>Battery aware</h4>
+        <h3>Battery aware</h3>
         <p>Shows your strap's battery level and warns when it's running low — so you don't lose hours of data to a flat coin cell.</p>
       </div>
       <div class="feature">
-        <h4>Optional self-hosted sync</h4>
-        <p>Want a backup? Point it at your own server. No service to sign up for; no third party between you and your data.</p>
+        <h3>Optional self-hosted sync</h3>
+        <p>Want a backup? Point it at your own server. No service to sign up for; no third party between you and your data. Open protocol — <a href="docs/api.html">documented here</a>.</p>
       </div>
     </div>
   </div>
@@ -196,8 +270,8 @@
     <h2 class="section-h center">Everything you see is the data.</h2>
     <p class="section-sub center">
       No marketing dashboards or motivational rings. Just the heart rate,
-      the strap, the session, the export. (Screenshots taken in the iOS
-      Simulator with synthetic data.)
+      the strap, the session, the export. (Screenshots were taken in the iOS
+      Simulator with synthetic data — real use needs a real strap.)
     </p>
 
     <div class="gallery">
@@ -231,8 +305,9 @@
     <p class="pull">
       I built this because I have dysautonomia and I wanted hard heart-rate data
       between cardiology appointments — without taping a Holter to my chest
-      for 48 hours every time. Then I realized: a lot of people probably want
-      this.
+      for 48 hours every time. Two months of data so far, for the cost of a
+      strap and two coin cells. Then I realized: a lot of people probably
+      want this.
       <span class="author">— The developer</span>
     </p>
   </div>
@@ -246,7 +321,8 @@
       <p>
         No tracking. No analytics. No third-party SDKs. The app needs Bluetooth
         permission and nothing else. Data leaves your phone only when you
-        explicitly export it. Read the
+        export it — or when you've pointed optional sync at a server you
+        control. Read the
         <a href="privacy.html">full privacy policy</a>.
       </p>
     </div>
@@ -258,8 +334,7 @@
   <div class="wrap">
     <div class="section-eyebrow center">FAQ</div>
     <h2 class="section-h center">Questions you might have.</h2>
-    <p class="section-sub center">If yours isn't here, email <a href="mailto:hello@example.com">hello@example.com</a>.</p>
-    <!-- AIDEV-TODO: replace hello@example.com with the real support address. -->
+    <p class="section-sub center">If yours isn't here, email <a href="mailto:jonathan@jonathanaddington.com">jonathan@jonathanaddington.com</a>.</p>
 
     <div class="faq">
       <details>
@@ -302,7 +377,8 @@
         <div class="answer">
           iOS 16.0 or later. Works on every iPhone that supports iOS 16,
           including older models — the app is intentionally lightweight so it
-          runs comfortably on a 5-year-old phone.
+          runs comfortably on a 5-year-old phone. The Lock Screen Live
+          Activity needs iOS 16.1; everything else works on 16.0.
         </div>
       </details>
 
@@ -342,8 +418,29 @@
         <div class="answer">
           No. HRM Recorder is not a medical device and isn't intended to
           diagnose, treat, or monitor any condition. It records what your
-          Bluetooth strap reports. Bring the data to your clinician; let them
-          interpret it.
+          Bluetooth strap reports.
+          It's worth knowing what that is, though: a chest strap reads the
+          heart's electrical signal — the same signal an ECG reads — and
+          chest-strap R-R timing has been
+          <a href="https://doi.org/10.1007/s00421-019-04142-5">validated
+          closely against clinical ECG Holters</a>. What it records is heart
+          <em>rate</em>, beat by beat — not rhythm. It cannot see the waveform
+          shapes a cardiologist uses to diagnose arrhythmias. Bring the data
+          to your clinician; let them interpret it.
+        </div>
+      </details>
+
+      <details>
+        <summary>Why isn't there a hosted sync service or sharing site?</summary>
+        <div class="answer">
+          Because hosting other people's health data is a heavy legal and
+          ethical obligation — GDPR and similar laws apply even to a free
+          service run in good faith. Rather than do that badly, HRM Recorder
+          ships an open sync protocol and the tools to run your own receiver:
+          a <a href="docs/api.html">documented API</a>, a reference server,
+          and a <a href="docs/flask-example.html">small Flask example</a> you
+          can self-host. Someday a proper sharing service might exist. Today,
+          you get the tools.
         </div>
       </details>
 
@@ -365,8 +462,7 @@
   <div class="wrap" style="text-align:center;">
     <h2 class="section-h center" style="margin-bottom:24px;">Record your heart.<br/>Keep your data.</h2>
     <div class="cta-row">
-      <!-- AIDEV-TODO: replace {{APP_STORE_URL}} below as well. -->
-      <a class="btn primary" href="{{APP_STORE_URL}}">Download on the App Store</a>
+      <a class="btn primary" href="https://apps.apple.com/app/id6770766954">Download on the App Store</a>
     </div>
   </div>
 </section>
@@ -376,8 +472,9 @@
     <div>© <span id="year">2026</span> HRM Recorder · iPhone app</div>
     <div class="links">
       <a href="https://github.com/jmaddington/HRMRecorder">GitHub</a>
+      <a href="docs/index.html">Docs</a>
       <a href="privacy.html">Privacy</a>
-      <a href="mailto:hello@example.com">Contact</a>
+      <a href="mailto:jonathan@jonathanaddington.com">Contact</a>
     </div>
   </div>
 </footer>

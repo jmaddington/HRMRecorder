@@ -1,0 +1,212 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Flask receiver example — HRM Recorder</title>
+  <meta name="description" content="A minimal, annotated Flask server that receives HRM Recorder sync data: static token auth, SQLite storage, and the full Protocol v1 conformance checklist in one downloadable file." />
+  <meta name="theme-color" content="#ff2d2d" media="(prefers-color-scheme: light)" />
+  <meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)" />
+  <link rel="stylesheet" href="../style.css" />
+</head>
+<body>
+
+<nav class="nav">
+  <div class="wrap">
+    <a class="brand" href="../index.html">HRM Recorder</a>
+    <div class="links">
+      <a href="index.html">Docs</a>
+      <a href="api.html">API</a>
+      <a href="flask-example.html">Flask example</a>
+      <a href="../privacy.html">Privacy</a>
+      <a href="https://github.com/jmaddington/HRMRecorder">GitHub</a>
+    </div>
+  </div>
+</nav>
+
+<section>
+  <div class="wrap">
+    <article class="prose docs">
+      <h1>A minimal Flask receiver.</h1>
+      <p class="doc-meta">
+        One file — about 300 lines, heavily commented: Flask + SQLite +
+        a static Bearer token, implementing the complete
+        <a href="api.html">Protocol v1 conformance checklist</a>.
+        <a href="examples/hrm_receiver.py" download>Download
+        <code>hrm_receiver.py</code></a> and read along.
+      </p>
+
+      <p>
+        This is a starting point for receiving <em>your own</em> health data
+        on <em>your own</em> server — deliberately small so you can read all
+        of it, not hardened production code. Two things it does not do for
+        you: TLS (put a reverse proxy like Caddy or nginx in front — the app
+        refuses plain <code>http://</code> base URLs, so this is not
+        optional) and multi-user accounts (one token, one account — the
+        token <em>is</em> the account).
+      </p>
+
+      <h2>Run it</h2>
+      <pre><code># In a fresh directory:
+uv venv venv &amp;&amp; source venv/bin/activate   # or python3 -m venv venv
+uv pip install flask                        # or: pip install flask
+
+export HRM_TOKEN="pick-a-long-random-string"
+python hrm_receiver.py                      # or: flask --app hrm_receiver run</code></pre>
+      <p>
+        Then in the app: Settings → Server Sync → enter your server's HTTPS
+        base URL and paste the same token. The "Test connection" button
+        calls <code>GET /ping</code>, sees <code>"mode": "token"</code>, and
+        knows to use the pasted token as a Bearer credential.
+      </p>
+
+      <h2>Discovery: <code>GET /ping</code></h2>
+      <p>
+        The only unauthenticated endpoint. It tells the app the protocol
+        version, the biggest samples batch we accept, and how to
+        authenticate:
+      </p>
+      <pre><code>@app.get("/ping")
+def ping():
+    return jsonify({
+        "ok": True,
+        "protocol": 1,
+        "limits": {"max_samples_per_request": MAX_SAMPLES},
+        "auth": {"mode": "token"},
+    })</code></pre>
+
+      <h2>Auth: one token, checked everywhere else</h2>
+      <p>
+        A <code>before_request</code> hook rejects anything but
+        <code>/ping</code> unless the Bearer token matches. Note
+        <code>hmac.compare_digest</code> rather than <code>==</code> — a
+        constant-time comparison avoids leaking token prefixes through
+        response timing:
+      </p>
+      <pre><code>@app.before_request
+def check_auth():
+    if request.path.rstrip("/").endswith("/ping") and request.method == "GET":
+        return None
+    header = request.headers.get("Authorization", "")
+    supplied = header[len("Bearer "):] if header.startswith("Bearer ") else ""
+    if not hmac.compare_digest(supplied.encode(), TOKEN.encode()):
+        return err(401, "unauthorized", "Bearer token required")</code></pre>
+
+      <h2>Devices &amp; sessions: the COALESCE upsert</h2>
+      <p>
+        Strap identity (manufacturer, model, firmware…) arrives on the phone
+        as separate asynchronous Bluetooth reads, so the app sends partial
+        rows that fill in over time. The rule: <strong>an incoming non-null
+        field wins; an incoming null or blank never clobbers a stored
+        value</strong>. SQLite's <code>ON CONFLICT … DO UPDATE</code> with
+        <code>COALESCE</code> expresses it directly:
+      </p>
+      <pre><code>ON CONFLICT(client_device_id) DO UPDATE SET
+  name          = COALESCE(excluded.name, name),
+  manufacturer  = COALESCE(excluded.manufacturer, manufacturer),
+  ...
+  -- first_seen is historical fact: first write wins.
+  first_seen    = COALESCE(first_seen, excluded.first_seen)</code></pre>
+      <p>
+        (<code>excluded.x</code> is the incoming value; bare <code>x</code>
+        is what's stored. Blank strings are normalized to <code>None</code>
+        before binding so they count as null.) Sessions use the same
+        pattern, with one extra rule — <code>ended_at</code> may go
+        null&nbsp;→&nbsp;value exactly once, and never back. A re-sent stale
+        "still recording" snapshot must not reopen a closed session:
+      </p>
+      <pre><code>started_at = COALESCE(excluded.started_at, started_at),  -- incoming wins
+ended_at   = COALESCE(ended_at, excluded.ended_at),       -- stored wins</code></pre>
+
+      <h2>Samples: dedupe, forward references, and the cursor</h2>
+      <p>Three invariants make re-sending always safe for the app:</p>
+      <ol>
+        <li>
+          <strong>Silent dedupe.</strong> The table's primary key is
+          <code>(client_session_id, client_sample_id)</code> — the
+          protocol's idempotency identity — and inserts use
+          <code>INSERT OR IGNORE</code>. A duplicate is counted, not
+          rejected; the response says <code>{"accepted": 0, "duplicates":
+          3, ...}</code> and never a <code>409</code>.
+        </li>
+        <li>
+          <strong>Forward references.</strong> A sample may arrive before
+          its session or device row (the app batches independently). The
+          receiver stubs the parent rows with <code>INSERT OR IGNORE</code>;
+          later upserts upgrade the stubs via COALESCE.
+        </li>
+        <li>
+          <strong>An honest cursor.</strong>
+          <code>max_client_sample_id</code> is computed from the database
+          <em>after commit</em> — the largest id durably stored across the
+          request's sessions — never echoed from the batch. The app trusts
+          this number as its resume point, so guessing here loses data.
+        </li>
+      </ol>
+      <p>
+        Oversized batches get the protocol's exact over-cap shape, which the
+        app reacts to by halving and retrying:
+      </p>
+      <pre><code>if len(items) > max_items:
+    return err(413, "batch_too_large", max=max_items)</code></pre>
+
+      <h2>State recovery: <code>GET /sessions/&lt;id&gt;</code></h2>
+      <p>
+        After a reinstall (or if you restore the server from an old backup),
+        the app asks what the server already has and repairs its cursor. An
+        unknown session is a normal answer — <code>{"known": false}</code>
+        with HTTP <strong>200</strong>, because to the app a <code>404</code>
+        means "wrong base URL".
+      </p>
+
+      <h2>Try it with curl</h2>
+      <p>The same round-trip the app performs (against a local run):</p>
+      <pre><code>B=http://127.0.0.1:8000
+T="Authorization: Bearer pick-a-long-random-string"
+
+curl $B/ping
+# {"auth":{"mode":"token"},"limits":{"max_samples_per_request":1000},"ok":true,"protocol":1}
+
+curl -H "$T" -H 'Content-Type: application/json' -X POST $B/sessions \
+  -d '{"items":[{"client_session_id":"s1","started_at":1752314400.0,"ended_at":null}]}'
+# {"accepted":1}
+
+curl -H "$T" -H 'Content-Type: application/json' -X POST $B/samples \
+  -d '{"items":[{"client_session_id":"s1","client_sample_id":101,
+       "ts":1752314401.25,"bpm":62,"rr_ms":"968;962","contact":1}]}'
+# {"accepted":1,"duplicates":0,"max_client_sample_id":101}
+
+# Re-send the identical batch — idempotency in action:
+# {"accepted":0,"duplicates":1,"max_client_sample_id":101}
+
+curl -H "$T" $B/sessions/s1
+# {"ended_at":null,"known":true,"max_client_sample_id":101,"sample_count":1}</code></pre>
+
+      <h2>Where to go from here</h2>
+      <ul>
+        <li>Full contract: the <a href="api.html">API reference</a> and the normative <a href="https://github.com/jmaddington/HRMRecorder/blob/main/docs/SYNC_PROTOCOL.md">SYNC_PROTOCOL.md</a>.</li>
+        <li>Cross-check your own implementation against the repo's <a href="https://github.com/jmaddington/HRMRecorder/blob/main/docs/mock_server.py">stdlib mock server</a> — <code>python3 mock_server.py --selftest</code> exercises the tricky invariants, including the OAuth 2.1 flow this example skips.</li>
+        <li>Hardening ideas, in rough order: TLS via reverse proxy (required), a WSGI server (gunicorn/waitress), request-size limits, backups of the SQLite file, and rate limiting.</li>
+      </ul>
+    </article>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <div>© <span id="year">2026</span> HRM Recorder · iPhone app</div>
+    <div class="links">
+      <a href="https://github.com/jmaddington/HRMRecorder">GitHub</a>
+      <a href="index.html">Docs</a>
+      <a href="../privacy.html">Privacy</a>
+      <a href="mailto:jonathan@jonathanaddington.com">Contact</a>
+    </div>
+  </div>
+</footer>
+
+<script>
+  document.getElementById('year').textContent = new Date().getFullYear();
+</script>
+
+</body>
+</html>

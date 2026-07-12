@@ -1,0 +1,367 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Sync API reference — HRM Recorder</title>
+  <meta name="description" content="HRM Recorder Server Sync Protocol v1 reference: endpoints, authentication, resources, batching, idempotency, and the conformance checklist for self-hosted receivers." />
+  <meta name="theme-color" content="#ff2d2d" media="(prefers-color-scheme: light)" />
+  <meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)" />
+  <link rel="stylesheet" href="../style.css" />
+</head>
+<body>
+
+<!-- AIDEV-NOTE: mirrors docs/SYNC_PROTOCOL.md (normative). Don't invent endpoints/fields; update both together. -->
+<nav class="nav">
+  <div class="wrap">
+    <a class="brand" href="../index.html">HRM Recorder</a>
+    <div class="links">
+      <a href="index.html">Docs</a>
+      <a href="api.html">API</a>
+      <a href="flask-example.html">Flask example</a>
+      <a href="../privacy.html">Privacy</a>
+      <a href="https://github.com/jmaddington/HRMRecorder">GitHub</a>
+    </div>
+  </div>
+</nav>
+
+<section>
+  <div class="wrap">
+    <article class="prose docs">
+      <h1>Sync API.</h1>
+      <p class="doc-meta">
+        Server Sync <strong>Protocol v1</strong> — implemented and shipping
+        in the app. This page is a reference rendering of the normative spec:
+        <a href="https://github.com/jmaddington/HRMRecorder/blob/main/docs/SYNC_PROTOCOL.md">SYNC_PROTOCOL.md</a>.
+        The stdlib
+        <a href="https://github.com/jmaddington/HRMRecorder/blob/main/docs/mock_server.py">mock server</a>
+        (run it with <code>--selftest</code>) is the executable conformance
+        reference.
+      </p>
+
+      <p>
+        HRM Recorder is not tied to any one server. The user supplies a base
+        URL and authenticates; the app then pushes its recorded data using
+        the protocol below. Implement it and the app syncs to your server
+        with no app changes. Design goals: anyone can implement the server
+        side (plain HTTPS + JSON), writes are idempotent and resumable, sync
+        is incremental, data is transferred at full fidelity (every ~1&nbsp;Hz
+        sample, R-R intervals, per-strap attribution), and a sync never
+        deletes anything on the phone — the local SQLite database stays the
+        source of truth.
+      </p>
+
+      <h2>Transport &amp; conventions</h2>
+      <div class="table-scroll">
+        <table>
+          <caption class="visually-hidden">Transport and protocol conventions</caption>
+          <thead><tr><th scope="col">Aspect</th><th scope="col">Value</th></tr></thead>
+          <tbody>
+            <tr><td>Transport</td><td><strong>HTTPS only.</strong> Plaintext HTTP is rejected by the app, no exceptions.</td></tr>
+            <tr><td>Encoding</td><td><code>application/json; charset=utf-8</code>, request and response.</td></tr>
+            <tr><td>Base URL</td><td>User-configured — the <em>complete</em> prefix the operator hands out (e.g. <code>https://dash.example.com/api/v1/health/hr/</code>). The app appends only the relative resource segments below; it adds no version or path prefix of its own.</td></tr>
+            <tr><td>Protocol version</td><td>Sent as the <code>X-HRM-Protocol: 1</code> request header; echoed by <code>GET ping</code>. Not in the path.</td></tr>
+            <tr><td>Timestamps</td><td>Unix epoch <strong>seconds</strong> as JSON numbers; sub-second fractions allowed (matches the app's storage exactly).</td></tr>
+            <tr><td>Auth</td><td><code>Authorization: Bearer &lt;token&gt;</code> on every data request — an OAuth 2.1 access token or a static token (see below).</td></tr>
+            <tr><td>Time skew</td><td>Servers must not reject on client clock skew; <code>ts</code> is the device clock, stored as-is.</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>For a configured base <code>B</code>, a conformant server exposes:</p>
+      <pre><code>GET   B/ping                              # unauthenticated discovery
+POST  B/devices
+POST  B/sessions
+POST  B/samples
+GET   B/sessions/{client_session_id}</code></pre>
+      <p>
+        <code>ping</code> is the only unauthenticated endpoint; it carries no
+        user data and exists so the app can discover reachability, protocol
+        version, batch limits, and how to authenticate before it has a token.
+      </p>
+
+      <h2>Authentication</h2>
+      <p>
+        Every data request carries <code>Authorization: Bearer</code>. How
+        the app obtains the token depends on what the server advertises in
+        <code>GET ping</code> under <code>auth</code>:
+      </p>
+
+      <h3>OAuth 2.1 (preferred)</h3>
+      <p>
+        If <code>ping.auth.mode == "oauth"</code>, the server provides
+        <code>auth.oauth_metadata_url</code> — an absolute URL to RFC 8414
+        authorization-server metadata. The app then performs standard
+        OAuth 2.1:
+      </p>
+      <ul>
+        <li>RFC 8414 metadata discovery at <code>oauth_metadata_url</code>.</li>
+        <li>RFC 7591 dynamic client registration — the app is a public client; no pre-registration or operator-side app config required.</li>
+        <li>Authorization Code + <strong>PKCE (S256)</strong> in an in-app system web-auth session; the custom scheme <code>hrmrecorder://oauth-callback</code> returns the code.</li>
+        <li>Token exchange yields an access token plus a <strong>refresh token</strong> — the refresh token is what lets the background uploader keep working unattended; the user signs in once.</li>
+        <li>On <code>401</code>, the app refreshes; if refresh fails it surfaces "sign in again" (recording is never affected).</li>
+        <li>Servers must enforce an <strong>exact redirect-URI match</strong>; short-lived access tokens with rotating refresh tokens are recommended.</li>
+      </ul>
+      <p>
+        This can reuse a server's existing OAuth 2.1 authorization server —
+        no HR-specific OAuth endpoint is required. Tokens must carry write
+        access for ingest and read access for the read endpoints.
+      </p>
+
+      <h3>Static Bearer token (fallback)</h3>
+      <p>
+        If <code>ping.auth.mode == "token"</code> (or <code>ping</code> is
+        unreachable or omits <code>auth</code>), the app uses a static opaque
+        token the user pastes into Settings, issued out-of-band from your
+        server's own settings UI. This keeps the minimum server bar low: a
+        DIY server that only checks a shared secret is fully conformant.
+      </p>
+      <p>
+        Either way the token is opaque to the app and stored in the iOS
+        <strong>Keychain</strong>, never in plist-backed preferences.
+      </p>
+
+      <h2>Identifiers</h2>
+      <div class="table-scroll">
+        <table>
+          <caption class="visually-hidden">Client-generated identifiers</caption>
+          <thead><tr><th scope="col">Name</th><th scope="col">Type</th><th scope="col">Origin</th><th scope="col">Stability</th></tr></thead>
+          <tbody>
+            <tr><td><code>client_session_id</code></td><td>string (≤ 64)</td><td>App session id, e.g. <code>20260519T143012Z-a3f</code></td><td>Stable forever for that recording</td></tr>
+            <tr><td><code>client_sample_id</code></td><td>int64</td><td>App sample row id (SQLite <code>AUTOINCREMENT</code>)</td><td>Strictly increasing per install; the sync cursor</td></tr>
+            <tr><td><code>client_device_id</code></td><td>string (≤ 64)</td><td>Strap's Bluetooth peripheral UUID</td><td>Stable per physical strap per install</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>
+        All three are client-generated. The server treats them as opaque
+        natural keys scoped to the authenticated account, assigns its own
+        primary keys, and must never require the client to know server-side
+        keys. There are no account identifiers on the wire — <em>the token is
+        the account</em>.
+      </p>
+
+      <h2>Endpoints</h2>
+      <p>
+        Writes are batch-shaped (<code>{"items":[...]}</code>) so one
+        endpoint serves one or many items. All writes are idempotent.
+      </p>
+
+      <h3><span class="endpoint">GET ping</span> — unauthenticated discovery</h3>
+      <pre><code>{
+  "ok": true,
+  "protocol": 1,
+  "limits": { "max_samples_per_request": 1000 },
+  "auth": {
+    "mode": "oauth",
+    "oauth_metadata_url": "https://dash.example.com/.well-known/oauth-authorization-server"
+  }
+}</code></pre>
+      <p>
+        <code>auth.mode</code> is <code>"oauth"</code> or
+        <code>"token"</code>; for <code>"token"</code>,
+        <code>oauth_metadata_url</code> is omitted. The app's "Test
+        connection" button calls this, then (if it has a token) an
+        authenticated probe.
+      </p>
+
+      <h3><span class="endpoint">POST devices</span> — upsert strap identities</h3>
+      <p>Request: <code>{"items":[Device, ...]}</code>, at most 200 items.</p>
+      <pre><code>{
+  "items": [
+    {
+      "client_device_id": "6E7A1C0B-3C9A-4F2D-9E76-2B1F0A9C4D11",
+      "name": "HRM-Pro+",
+      "manufacturer": "Garmin",
+      "model": null,
+      "firmware": "5.10",
+      "body_location": "Chest",
+      "first_seen": 1747668000.0
+    }
+  ]
+}</code></pre>
+      <p>Response: <code>200 {"accepted": 1}</code>.</p>
+      <p>
+        <strong>COALESCE semantics:</strong> a <code>null</code>/blank field
+        must not overwrite a stored non-null value. Device details arrive on
+        the phone as separate asynchronous Bluetooth reads, so partial rows
+        trickle in and accumulate.
+      </p>
+
+      <h3><span class="endpoint">POST sessions</span> — upsert sessions</h3>
+      <p>Request: <code>{"items":[Session, ...]}</code>, at most 200 items.</p>
+      <pre><code>{
+  "items": [
+    {
+      "client_session_id": "20260519T143012Z-a3f",
+      "started_at": 1747668612.4,
+      "ended_at": null,
+      "device_name": "HRM-Pro+",
+      "manufacturer": "Garmin",
+      "model": "HRM-Pro Plus",
+      "firmware": "5.10",
+      "body_location": "Chest"
+    }
+  ]
+}</code></pre>
+      <p>
+        Response: <code>200 {"accepted": 1}</code>. Same COALESCE rules;
+        additionally <code>ended_at</code> may transition
+        <code>null</code>&nbsp;→&nbsp;value (the session closed) but never
+        back.
+      </p>
+
+      <h3><span class="endpoint">POST samples</span> — append samples</h3>
+      <p>
+        Request: <code>{"items":[Sample, ...]}</code>, at most
+        <code>max_samples_per_request</code> items.
+      </p>
+      <pre><code>{
+  "items": [
+    {
+      "client_session_id": "20260519T143012Z-a3f",
+      "client_sample_id": 84211,
+      "client_device_id": "6E7A1C0B-3C9A-4F2D-9E76-2B1F0A9C4D11",
+      "ts": 1747668613.25,
+      "bpm": 62,
+      "rr_ms": "968;962",
+      "contact": 1,
+      "energy_kj": null
+    }
+  ]
+}</code></pre>
+      <p>Response:</p>
+      <pre><code>{ "accepted": 1000, "duplicates": 0, "max_client_sample_id": 84211 }</code></pre>
+      <ul>
+        <li>Dedupe on <code>(account, client_session_id, client_sample_id)</code>; duplicates are ignored <em>silently</em> — never a <code>409</code>.</li>
+        <li>Samples whose session/device rows have not arrived yet are still accepted (forward references).</li>
+        <li><code>max_client_sample_id</code> is the largest id durably stored for this account across the request's sessions — the app's cursor.</li>
+        <li>Over-cap requests get <code>413 {"error":{"code":"batch_too_large","max":N}}</code>.</li>
+      </ul>
+
+      <h3><span class="endpoint">GET sessions/{client_session_id}</span> — state recovery</h3>
+      <p>Cursor/state recovery after a reinstall or a server restore-from-backup.</p>
+      <pre><code>{ "known": true, "ended_at": 1747668000.0, "sample_count": 6588, "max_client_sample_id": 84211 }</code></pre>
+      <p>
+        An unknown session returns <code>{"known": false}</code> with
+        HTTP&nbsp;<strong>200</strong> — absence is a normal answer, not an
+        error.
+      </p>
+
+      <h2>Resources</h2>
+      <p>
+        Field nullability matches the app's SQLite schema — <code>null</code>
+        wherever the strap did not report a value. Fields marked
+        <code>?</code> are nullable/optional.
+      </p>
+      <div class="table-scroll">
+        <table>
+          <caption class="visually-hidden">Resource field definitions</caption>
+          <thead><tr><th scope="col">Resource</th><th scope="col">Fields</th></tr></thead>
+          <tbody>
+            <tr>
+              <td>Device</td>
+              <td><code>client_device_id</code>, <code>name?</code>, <code>manufacturer?</code>, <code>model?</code>, <code>firmware?</code>, <code>body_location?</code>, <code>first_seen</code> (epoch)</td>
+            </tr>
+            <tr>
+              <td>Session</td>
+              <td><code>client_session_id</code>, <code>started_at</code> (epoch), <code>ended_at?</code> (epoch; null while recording), <code>device_name?</code>, <code>manufacturer?</code>, <code>model?</code>, <code>firmware?</code>, <code>body_location?</code></td>
+            </tr>
+            <tr>
+              <td>Sample</td>
+              <td><code>client_session_id</code>, <code>client_sample_id</code> (int64), <code>client_device_id?</code>, <code>ts</code> (epoch, sub-second), <code>bpm</code> (int), <code>rr_ms?</code> (semicolon-joined ms, verbatim, e.g. <code>"812;806"</code>), <code>contact?</code> (1 good / 0 poor / null), <code>energy_kj?</code> (int)</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h2>Batching &amp; limits</h2>
+      <ul>
+        <li>Default sample-batch ceiling is <strong>1000</strong>; a server may lower it via <code>ping.limits.max_samples_per_request</code>, and the app honors it.</li>
+        <li>An over-cap body gets <code>413</code> <code>{"error":{"code":"batch_too_large","max":N}}</code>; the app halves the batch and retries.</li>
+        <li>The app sends batches in ascending <code>client_sample_id</code> and advances its cursor only after a <code>2xx</code>.</li>
+      </ul>
+
+      <h2>Idempotency &amp; incremental sync</h2>
+      <p>
+        The app keeps one integer <strong>cursor</strong> — the highest
+        acknowledged <code>client_sample_id</code>. The client algorithm:
+      </p>
+      <pre><code>on trigger (session end, app foreground/background, retry timer):
+  ensure valid token (OAuth refresh if needed) — else surface, stop
+  POST devices   { changed devices }
+  POST sessions  { sessions touched since last sync }
+  loop:
+    batch = local samples WHERE id &gt; cursor ORDER BY id LIMIT N
+    if empty: break
+    resp = POST samples { batch }
+    cursor = max(cursor, resp.max_client_sample_id)
+  persist cursor</code></pre>
+      <p>
+        <strong>Cursor repair</strong> (reinstall, lost local state, server
+        restored from an old backup): the app calls
+        <code>GET sessions/{id}</code> and sets
+        <code>cursor&nbsp;=&nbsp;min(local, server.max_client_sample_id)</code>,
+        so anything the server lacks is re-sent. Because writes are
+        idempotent, over-sending is always safe.
+      </p>
+
+      <h2>Errors</h2>
+      <p>Non-2xx responses carry a JSON body: <code>{"error":{"code":"...","message":"..."}}</code>.</p>
+      <div class="table-scroll">
+        <table>
+          <caption class="visually-hidden">HTTP status codes and app behavior</caption>
+          <thead><tr><th scope="col">HTTP</th><th scope="col">Meaning</th><th scope="col">App behavior</th></tr></thead>
+          <tbody>
+            <tr><td>200</td><td>OK</td><td>Advance cursor</td></tr>
+            <tr><td>400</td><td>Malformed</td><td>Surface; don't blind-retry</td></tr>
+            <tr><td>401</td><td>Token expired/invalid</td><td>OAuth: refresh then retry. Static: surface "check token"</td></tr>
+            <tr><td>403</td><td>Insufficient scope</td><td>Surface "re-authorize"</td></tr>
+            <tr><td>404</td><td>Wrong base URL / route</td><td>Surface "check server URL"</td></tr>
+            <tr><td>413</td><td>Batch too large</td><td>Halve, retry</td></tr>
+            <tr><td>429</td><td>Rate limited</td><td>Honor <code>Retry-After</code>, back off</td></tr>
+            <tr><td>5xx</td><td>Server error</td><td>Exponential backoff</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>
+        A sync failure never affects recording and never deletes local data.
+      </p>
+
+      <h2>Minimum conformance checklist</h2>
+      <p>A conformant server MUST:</p>
+      <ol>
+        <li>Serve <code>GET ping</code> unauthenticated with <code>protocol</code>, <code>limits</code>, and <code>auth</code>.</li>
+        <li>Authenticate every data request via <code>Authorization: Bearer</code>.</li>
+        <li>Either advertise OAuth 2.1 (RFC 8414 metadata + RFC 7591 + PKCE) <strong>or</strong> accept a static Bearer token — at least one.</li>
+        <li>Implement <code>devices</code>, <code>sessions</code>, <code>samples</code>, <code>sessions/{id}</code>.</li>
+        <li>Treat <code>(account, client_session_id, client_sample_id)</code> as the sample identity; ignore duplicates without error.</li>
+        <li>Apply COALESCE (non-null-wins) upsert to device/session identity fields.</li>
+        <li>Return an accurate <code>max_client_sample_id</code>; accept samples whose session/device rows have not arrived yet; never require server-side keys.</li>
+      </ol>
+      <p>
+        Want to see all of that in a few hundred lines of commented Python?
+        Read the <a href="flask-example.html">Flask example</a>.
+      </p>
+    </article>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <div>© <span id="year">2026</span> HRM Recorder · iPhone app</div>
+    <div class="links">
+      <a href="https://github.com/jmaddington/HRMRecorder">GitHub</a>
+      <a href="index.html">Docs</a>
+      <a href="../privacy.html">Privacy</a>
+      <a href="mailto:jonathan@jonathanaddington.com">Contact</a>
+    </div>
+  </div>
+</footer>
+
+<script>
+  document.getElementById('year').textContent = new Date().getFullYear();
+</script>
+
+</body>
+</html>
