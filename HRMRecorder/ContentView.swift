@@ -88,12 +88,19 @@ struct ContentView: View {
         }
     }
 
+    /// Shared by both layout variants, so Sessions AND Graphs appear in
+    /// portrait and landscape alike (see the layout-contract note above).
     private var sessionsLinkSection: some View {
         Section {
             NavigationLink {
                 SessionsView()
             } label: {
                 Label("Sessions", systemImage: "list.bullet.rectangle")
+            }
+            NavigationLink {
+                HRHistoryGraphView()
+            } label: {
+                Label("Graphs", systemImage: "chart.xyaxis.line")
             }
         } footer: {
             Text(Self.versionString)
@@ -381,21 +388,27 @@ struct SessionsView: View {
                     Text("No sessions yet").foregroundStyle(.secondary)
                 }
                 ForEach(sessions) { s in
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(s.startedAt, format: .dateTime.year().month().day()
-                            .hour().minute().second())
-                            .font(.subheadline.weight(.medium))
-                        HStack(spacing: 10) {
-                            Label("\(s.sampleCount)", systemImage: "waveform.path.ecg")
-                            if let sensor = sessionSensorLabel(s) {
-                                Label(sensor, systemImage: "sensor.tag.radiowaves.forward")
+                    // Row pushes the per-session graph; swipe actions
+                    // (Delete / CSV) are unchanged.
+                    NavigationLink {
+                        SessionGraphView(session: s)
+                    } label: {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(s.startedAt, format: .dateTime.year().month().day()
+                                .hour().minute().second())
+                                .font(.subheadline.weight(.medium))
+                            HStack(spacing: 10) {
+                                Label("\(s.sampleCount)", systemImage: "waveform.path.ecg")
+                                if let sensor = s.sensorLabel {
+                                    Label(sensor, systemImage: "sensor.tag.radiowaves.forward")
+                                }
+                                if s.endedAt == nil {
+                                    Text("active").foregroundStyle(.red)
+                                }
                             }
-                            if s.endedAt == nil {
-                                Text("active").foregroundStyle(.red)
-                            }
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
                         }
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
                     }
                     .swipeActions(edge: .trailing) {
                         Button(role: .destructive) {
@@ -520,15 +533,6 @@ struct SessionsView: View {
         guard let to = cal.date(byAdding: .day, value: 1,
                                  to: cal.startOfDay(for: rangeEnd)) else { return nil }
         return (from, to)
-    }
-
-    /// Prefer recorded sensor model over the advertised BLE name.
-    private func sessionSensorLabel(_ s: HRDatabase.SessionInfo) -> String? {
-        let identity = [s.manufacturer, s.model].compactMap { $0 }.joined(separator: " ")
-        if !identity.isEmpty {
-            return s.bodyLocation.map { "\(identity) (\($0))" } ?? identity
-        }
-        return s.deviceName
     }
 
     private func reload() {
