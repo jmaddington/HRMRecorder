@@ -15,7 +15,9 @@ final class HRDatabase {
     struct SessionInfo: Identifiable, Hashable {
         let id: String
         let startedAt: Date
-        let endedAt: Date?
+        // `var`: SessionGraphView freezes a local copy's endedAt if the row
+        // is deleted while its detail screen is open (never written back).
+        var endedAt: Date?
         let deviceName: String?
         let manufacturer: String?
         let model: String?
@@ -407,7 +409,7 @@ final class HRDatabase {
             }
             sqlite3_finalize(stmt)
             if out.count == Self.maxGraphBuckets {
-                NSLog("[HRMRecorder] graph bucket query hit row cap; series truncated [HRGRAPH-DB01]")
+                NSLog("[HRMRecorder] graph bucket query hit row cap; series may be truncated [HRGRAPH-DB01]")
             }
             out.reverse()   // DESC query order -> ascending for callers
             return out

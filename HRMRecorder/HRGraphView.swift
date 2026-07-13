@@ -512,22 +512,32 @@ struct SessionGraphView: View {
             }
         }
         // AIDEV-NOTE: HRGRAPH-END01 — recording stopped: one final reload catches the last ≤5 s of
-        // samples, and the row re-fetch sets endedAt so durationString stops tracking Date().
+        // samples, the row re-fetch sets endedAt so durationString stops tracking Date(), and the
+        // refresh timer stops (its ticks would be pure no-ops once the session has ended).
         .onChange(of: hr.isRecording) { _, recording in
             guard !recording, session.endedAt == nil else { return }
             reload(resetViewport: false)
             refreshSessionRow()
+            stopRefreshTimer()
         }
     }
 
     /// Re-fetch this session's row off-main (DB reads are `queue.sync`) and
     /// swap the snapshot, freezing `endedAt`/duration once recording stops.
+    /// If the row was deleted while this screen is open, freeze the local
+    /// copy instead so the Duration row stops advancing from Date().
     private func refreshSessionRow() {
         let db = model.db
         let id = session.id
         DispatchQueue.global(qos: .userInitiated).async {
-            guard let updated = db.session(id: id) else { return }
-            DispatchQueue.main.async { session = updated }
+            let updated = db.session(id: id)
+            DispatchQueue.main.async {
+                if let updated {
+                    session = updated
+                } else if session.endedAt == nil {
+                    session.endedAt = Date()
+                }
+            }
         }
     }
 
@@ -541,7 +551,10 @@ struct SessionGraphView: View {
         loadGeneration += 1
         let generation = loadGeneration
         loadInFlight = true
+        // AIDEV-NOTE: HRGRAPH-STATE01 — capture every @State value on main BEFORE dispatching;
+        // refreshSessionRow can swap `session` concurrently and @State must never be read off-main.
         let db = model.db
+        let sessionID = session.id
         let from = session.startedAt
         // +1 s slop on the exclusive upper bound so a sample stamped exactly
         // at ended_at can't be dropped; active sessions read up to now.
@@ -550,7 +563,7 @@ struct SessionGraphView: View {
         // ≤ ~400 buckets; short sessions approach raw 1 Hz (width floor is 1 s).
         let width = max(1.0, duration / 400.0)
         DispatchQueue.global(qos: .userInitiated).async {
-            let rows = db.bucketedSamples(sessionID: session.id, from: from, to: to,
+            let rows = db.bucketedSamples(sessionID: sessionID, from: from, to: to,
                                           bucketSeconds: width)
             DispatchQueue.main.async {
                 guard generation == loadGeneration else { return }

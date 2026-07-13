@@ -104,8 +104,12 @@ pre-feature rows.
 HRMRecorder/
   HRMRecorderApp.swift   App entry; owns the DB + BLE manager
   ContentView.swift      SwiftUI UI (live BPM, record toggle, sessions, export)
+  DisclaimerView.swift   First-run disclaimer sheet + launch gating
+  HRGraphView.swift      History & per-session HR graphs (Swift Charts)
+  HRGraphModels.swift    Graph math: ranges, gap-splitting, zoom/scroll viewport
   HeartRateManager.swift CoreBluetooth: scan/connect/parse 0x2A37
   HRDatabase.swift       libsqlite3 wrapper + CSV export
+  SessionFixtures.swift  DEBUG-only fake session seeding for screenshots
   Info.plist             Bluetooth usage string + bluetooth-central mode
 ```
 

@@ -10,7 +10,8 @@ struct ContentView: View {
     @State private var showDevicePicker = false
     @State private var deviceExpanded = false
     @State private var confirmForgetAll = false
-    // Evaluated once at view init — first launch only (see Disclaimer gate).
+    // Recomputed on every ContentView init; @State applies the initial value
+    // only once per state lifetime (see Disclaimer gate).
     @State private var showDisclaimer = Disclaimer.shouldPresentOnLaunch
 
     private let tick = Timer.publish(every: 1, on: .main, in: .common).autoconnect()

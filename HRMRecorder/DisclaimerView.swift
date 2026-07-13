@@ -1,6 +1,6 @@
 import SwiftUI
 
-// AIDEV-NOTE: first-run disclaimer gate; sheet until acknowledgedV1 set; -HRMScreenshot*/-HRMSeedFakeSessions skip it
+// AIDEV-NOTE: first-run disclaimer gate; sheet until acknowledgedV1 set; any -HRM* launch arg skips it (DEBUG)
 /// Persistence + launch gating for the one-time disclaimer.
 enum Disclaimer {
     private static let acknowledgedKey = "disclaimerAcknowledgedV1"
@@ -10,14 +10,13 @@ enum Disclaimer {
         set { UserDefaults.standard.set(newValue, forKey: acknowledgedKey) }
     }
 
-    /// True only while the user has never acknowledged. Automated screenshot
-    /// runs (root-swap args or fixture seeding) never present the sheet, so
-    /// captures land on the intended screen.
+    /// True only while the user has never acknowledged. Any automation launch
+    /// argument (the whole `-HRM` family: screenshots, fixture seeding, fake
+    /// sensor, auto-record, CSV export, and future ones) suppresses the sheet
+    /// so automated runs land on the intended screen.
     static var shouldPresentOnLaunch: Bool {
         #if DEBUG
-        let args = ProcessInfo.processInfo.arguments
-        if args.contains(where: { $0.hasPrefix("-HRMScreenshot") })
-            || args.contains("-HRMSeedFakeSessions") {
+        if ProcessInfo.processInfo.arguments.contains(where: { $0.hasPrefix("-HRM") }) {
             return false
         }
         #endif
