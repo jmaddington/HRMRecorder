@@ -5,6 +5,16 @@ HRM-Pro+ or any sensor exposing the standard Heart Rate Service `0x180D`),
 show live BPM, and record every reading to SQLite in real time. CSV export
 included. No activity/GPS recording — heart rate only.
 
+## Disclaimer
+
+HRMRecorder is a free, open-source app that records heart-rate data from a
+Bluetooth chest strap for general fitness and informational use. It is **not
+a medical device** — it does not diagnose, treat, or detect any condition,
+and its data is only as accurate as the sensor providing it; always rely on
+qualified medical professionals for health decisions. It was developed
+primarily by AI (Claude, with human review) and is provided as-is, without
+warranty, under the MIT License.
+
 ## Run it
 
 1. Open `HRMRecorder.xcodeproj` in Xcode.
@@ -101,3 +111,8 @@ HRMRecorder/
 
 No third-party dependencies — uses the system `SQLite3` module and
 CoreBluetooth only.
+
+## Contributing
+
+PRs are welcome. Issues are welcome too, but the maintainer is more than
+full-time at a day job, so responses can be expected to be slow.
