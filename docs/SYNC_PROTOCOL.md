@@ -1,6 +1,7 @@
 # HRM Recorder — Server Sync Protocol v1
 
-**Status:** Design (for review). Not yet implemented.
+**Status:** v1 — implemented and shipping in the app (`SyncUploader` /
+`SyncAuth` / `ServerSyncView`). This document remains the normative contract.
 **Audience:** Anyone running their own server to receive heart-rate data from
 HRM Recorder. This document is the contract. Implement it and the app will
 sync to your server with no app changes.
