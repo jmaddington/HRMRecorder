@@ -10,7 +10,10 @@ import Foundation
 ///
 /// Idempotent: each fixture session has a deterministic id and is only
 /// inserted when missing, so re-launching with the flag never duplicates.
-/// Additive: it never deletes or touches the user's real sessions.
+/// Exception: the "recent" fixture (`reanchoredIDs`) is deleted and reseeded
+/// on every seeded launch so it stays ~3 h old instead of aging out of the
+/// 1H/6H/24H graph ranges. Additive otherwise: it never deletes or touches
+/// the user's real sessions.
 ///
 /// AIDEV-NOTE: Two fake strap UUIDs (`primaryStrapID`, `backupStrapID`) so
 /// one fixture session can exercise the per-sample multi-strap attribution
@@ -20,6 +23,10 @@ enum SessionFixtures {
     // Deterministic strap UUIDs (stable across launches → idempotent).
     private static let primaryStrapID = UUID(uuidString: "F12734E1-0000-4000-8000-000000000001")!
     private static let backupStrapID  = UUID(uuidString: "F12734E1-0000-4000-8000-000000000002")!
+
+    // AIDEV-NOTE: fixtures re-anchored to now on EVERY seeded launch (delete+reseed) so short
+    // graph ranges never go empty as the fixture ages; the rest seed once and age naturally.
+    private static let reanchoredIDs: Set<String> = ["fixture-2026-lunchrun"]
 
     static func seedIfRequested(into db: HRDatabase) {
         guard ProcessInfo.processInfo.arguments.contains("-HRMSeedFakeSessions") else { return }
@@ -43,8 +50,15 @@ enum SessionFixtures {
 
         // Anchor the fixtures to "now" so the timeline always looks fresh.
         let now = Date()
-        for spec in specs(reference: now) where !db.sessionExists(id: spec.id) {
-            insert(spec, into: db)
+        for spec in specs(reference: now) {
+            if reanchoredIDs.contains(spec.id) {
+                // deleteSession is queue.async and the seed helpers are
+                // queue.sync on the same serial queue, so delete lands first.
+                db.deleteSession(spec.id)
+                insert(spec, into: db)
+            } else if !db.sessionExists(id: spec.id) {
+                insert(spec, into: db)
+            }
         }
     }
 

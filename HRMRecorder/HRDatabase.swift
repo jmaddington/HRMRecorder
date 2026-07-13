@@ -358,6 +358,8 @@ final class HRDatabase {
     /// Hard cap on rows one graph query may return. Callers scale
     /// `bucketSeconds` for ≤ ~400 buckets; the LIMIT makes a bad window/width
     /// combination degrade (truncate) instead of ballooning memory.
+    /// AIDEV-NOTE: HRGRAPH-DB02 — cap keeps the NEWEST buckets (DESC LIMIT, reversed in Swift);
+    /// ASC would silently drop the most recent data — the worst cut for a trailing time-series.
     private static let maxGraphBuckets = 2048
 
     /// Aggregate samples into fixed-width time buckets in one SQL pass:
@@ -382,7 +384,9 @@ final class HRDatabase {
                 WHERE ts >= ? AND ts < ?
                 """
             if sessionID != nil { sql += " AND session_id = ?" }
-            sql += " GROUP BY bucket ORDER BY bucket ASC LIMIT \(Self.maxGraphBuckets);"
+            // DESC + LIMIT keeps the newest buckets when over cap (HRGRAPH-DB02);
+            // reversed below so callers still receive the series ascending.
+            sql += " GROUP BY bucket ORDER BY bucket DESC LIMIT \(Self.maxGraphBuckets);"
             if sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK {
                 sqlite3_bind_double(stmt, 1, width)
                 sqlite3_bind_double(stmt, 2, from.timeIntervalSince1970)
@@ -405,6 +409,7 @@ final class HRDatabase {
             if out.count == Self.maxGraphBuckets {
                 NSLog("[HRMRecorder] graph bucket query hit row cap; series truncated [HRGRAPH-DB01]")
             }
+            out.reverse()   // DESC query order -> ascending for callers
             return out
         }
     }
