@@ -226,6 +226,9 @@ p.subhead {
   object-fit: cover;
   display: block;
 }
+/* AIDEV-NOTE: theme-aware shots wrap <img> in <picture>; display:contents keeps
+   the img the direct flex child so the sizing rules above still apply. */
+.phone-screen picture { display: contents; }
 
 /* ---------- Screenshot gallery ---------- */
 
@@ -254,6 +257,12 @@ p.subhead {
   font-weight: 600;
   font-size: 16px;
   margin-bottom: 2px;
+}
+/* Two-up gallery (graphs section): narrower track so a pair doesn't sprawl. */
+.gallery.duo {
+  max-width: 760px;
+  margin-left: auto;
+  margin-right: auto;
 }
 
 /* ---------- Audiences ---------- */

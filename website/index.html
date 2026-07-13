@@ -219,7 +219,8 @@
     <h2 class="section-h">Everything that matters. Nothing else.</h2>
     <p class="section-sub">
       The app does two things: record heart rate, and let you export it. Every
-      feature below exists to make one of those two things more reliable.
+      feature below either makes one of those two things more reliable, or
+      lets you see what you've recorded.
     </p>
 
     <div class="features">
@@ -238,6 +239,10 @@
       <div class="feature">
         <h3>Live Activity</h3>
         <p>Glance at live BPM from your Lock Screen and Dynamic Island, no need to open the app. (iOS 16.1+)</p>
+      </div>
+      <div class="feature">
+        <h3>History graphs</h3>
+        <p>Min–max band and average line, from the last hour out to 30 days, plus a graph for every session. Pinch to zoom. <a href="#graphs">See it below</a>.</p>
       </div>
       <div class="feature">
         <h3>Multi-strap aware</h3>
@@ -259,6 +264,49 @@
         <h3>Optional self-hosted sync</h3>
         <p>Want a backup? Point it at your own server. No service to sign up for; no third party between you and your data. Open protocol — <a href="docs/api.html">documented here</a>.</p>
       </div>
+    </div>
+  </div>
+</section>
+
+<!-- GRAPHS -->
+<!-- AIDEV-NOTE: graph shots ship light+dark via <picture>; keep copy free of medical claims (no "detect"/"alert"). -->
+<section id="graphs">
+  <div class="wrap">
+    <div class="section-eyebrow center">Graphs</div>
+    <h2 class="section-h center">A month of heartbeats, on one screen.</h2>
+    <p class="section-sub center">
+      Every recording builds the picture: a shaded band from the lowest to the
+      highest reading in each time bucket, with a line through the averages.
+      Step back to 30 days or zoom into the last hour, pinch and scroll, or
+      open any single session at full ~1&nbsp;Hz detail. Where you weren't
+      recording, the line simply breaks — gaps stay gaps.
+      (Shown with simulated demo data.)
+    </p>
+
+    <div class="gallery duo">
+      <figure>
+        <div class="phone"><div class="phone-screen">
+          <picture>
+            <source media="(prefers-color-scheme: dark)" srcset="screenshots/graph-session-dark.png" />
+            <img src="screenshots/graph-session.png"
+                 alt="Session graph: a 38-minute interval workout swinging between 75 and 171 BPM, drawn as an average line with a min-max band. Above it, session details — started date, duration, sensor Garmin HRM-Pro+ (Chest); below, min 75, avg 130, max 171, 2280 samples, and an Export Session as CSV button."
+                 width="800" height="1739" />
+          </picture>
+        </div></div>
+        <figcaption><strong>Every session, in full</strong>Interval work at ~1 Hz — min, average, max, and CSV export one tap away.</figcaption>
+      </figure>
+
+      <figure>
+        <div class="phone"><div class="phone-screen">
+          <picture>
+            <source media="(prefers-color-scheme: dark)" srcset="screenshots/graph-30d-dark.png" />
+            <img src="screenshots/graph-30d.png"
+                 alt="Graphs screen, 30-day view: seven recording sessions drawn as separate strokes and points with visible gaps between them, and a summary of min 55, avg 119, max 171 BPM across 11,340 samples."
+                 width="800" height="1739" />
+          </picture>
+        </div></div>
+        <figcaption><strong>30 days at a glance</strong>Seven sessions in a month. The line breaks between them — gaps are shown, not smoothed over.</figcaption>
+      </figure>
     </div>
   </div>
 </section>
