@@ -82,12 +82,17 @@ struct HRGraphChart: View {
         .frame(height: 300)
         // The chart writes scrollPositionDate as the user drags; clamp it back into the data
         // bounds and, if clamping moved it, write the clamped value back (converges immediately).
+        // AIDEV-NOTE: HRGRAPH-SCROLL01 — epsilon guard skips no-op viewport writes (echoes from
+        // apply/magnify/clamp write-backs) so they can't recompute the chart body needlessly.
         .onChange(of: scrollPositionDate) { _, newValue in
             guard var vp = viewport else { return }
-            vp.setScrollPosition(newValue)
-            viewport = vp
-            if vp.scrollPosition != newValue {
-                scrollPositionDate = vp.scrollPosition
+            let clamped = vp.clampScroll(newValue)
+            if abs(clamped.timeIntervalSince(vp.scrollPosition)) > 0.001 {
+                vp.setScrollPosition(clamped)
+                viewport = vp
+            }
+            if clamped != newValue {
+                scrollPositionDate = clamped
             }
         }
     }
@@ -102,6 +107,8 @@ struct HRGraphChart: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("Red line: average heart rate")
             HStack(spacing: 4) {
                 Rectangle()
                     .fill(Color.red.opacity(0.15))
@@ -110,6 +117,8 @@ struct HRGraphChart: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("Shaded band: minimum to maximum heart rate range")
             Spacer()
         }
     }
@@ -207,6 +216,7 @@ struct HRGraphSummaryRow: View {
 struct HRHistoryGraphView: View {
     @EnvironmentObject private var model: AppModel
     @EnvironmentObject private var hr: HeartRateManager
+    @Environment(\.scenePhase) private var scenePhase
 
     @State private var range: HRGraphRange
     @State private var buckets: [HRDatabase.HRBucket] = []
@@ -219,6 +229,15 @@ struct HRHistoryGraphView: View {
     @State private var latestSample: Date?
     @State private var refreshTimer: Timer?
     @State private var loadGeneration = 0
+    /// True while the newest-generation load is running; timer ticks skip
+    /// instead of piling further reads onto the serial DB queue.
+    @State private var loadInFlight = false
+    /// Sticky reset intent: survives a reset load being superseded by an
+    /// interleaved non-reset (timer) load, so the reset still applies.
+    @State private var viewportNeedsReset = false
+    /// Whether the screen is on screen (onAppear/onDisappear), so a scenePhase
+    /// flip back to .active never resurrects the timer for a covered view.
+    @State private var isVisible = false
 
     /// `initialRange` exists for the DEBUG screenshot flow (deterministic
     /// captures of each range); in-app navigation uses the default.
@@ -257,10 +276,25 @@ struct HRHistoryGraphView: View {
         .listStyle(.insetGrouped)
         .navigationTitle("Graphs")
         .onAppear {
+            isVisible = true
             reload(resetViewport: !loadedOnce)
             startRefreshTimer()
         }
-        .onDisappear { stopRefreshTimer() }
+        .onDisappear {
+            isVisible = false
+            stopRefreshTimer()
+        }
+        // AIDEV-NOTE: HRGRAPH-BG01 — onDisappear does NOT fire on backgrounding, and this app stays
+        // alive there (bluetooth-central); scenePhase must kill the timer or it polls for hours.
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active {
+                guard isVisible else { return }
+                reload(resetViewport: false)   // catch up on samples missed while backgrounded
+                startRefreshTimer()
+            } else {
+                stopRefreshTimer()
+            }
+        }
         .onChange(of: range) { _, _ in reload(resetViewport: true) }
         // One extra reload when recording toggles, so the final samples of a
         // just-stopped session (or the first of a new one) appear promptly.
@@ -292,9 +326,13 @@ struct HRHistoryGraphView: View {
 
     // AIDEV-NOTE: HRGRAPH-LOAD01 — reads run off-main (HRDatabase serializes internally); a
     // generation token drops stale results if the range changes mid-flight. Insert path untouched.
+    // AIDEV-NOTE: HRGRAPH-RESET01 — reset intent is sticky (viewportNeedsReset), not per-call: if a
+    // timer load supersedes a reset load, the survivor still applies the reset (no stale-VP rebase).
     private func reload(resetViewport: Bool) {
+        if resetViewport { viewportNeedsReset = true }
         loadGeneration += 1
         let generation = loadGeneration
+        loadInFlight = true
         let db = model.db
         let selected = range
         let to = Date()
@@ -305,8 +343,11 @@ struct HRHistoryGraphView: View {
             let extent = rows.isEmpty ? db.sampleExtent() : nil
             DispatchQueue.main.async {
                 guard generation == loadGeneration else { return }
+                loadInFlight = false
                 latestSample = extent?.last
-                apply(rows, bucketSeconds: selected.bucketSeconds, resetViewport: resetViewport)
+                apply(rows, bucketSeconds: selected.bucketSeconds,
+                      resetViewport: viewportNeedsReset)
+                viewportNeedsReset = false
                 loadedOnce = true
             }
         }
@@ -331,12 +372,12 @@ struct HRHistoryGraphView: View {
         }
     }
 
-    // AIDEV-NOTE: HRGRAPH-TICK01 — gentle 5 s refresh, only while this screen is visible AND a
-    // recording is active; invalidated on disappear. Never per-sample, never blocks capture.
+    // AIDEV-NOTE: HRGRAPH-TICK01 — gentle 5 s refresh, only while this screen is visible AND the
+    // scene is active AND a recording is on; ticks skip while a load is in flight (no queue pile-up).
     private func startRefreshTimer() {
         stopRefreshTimer()
         refreshTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { _ in
-            guard hr.isRecording else { return }
+            guard hr.isRecording, !loadInFlight else { return }
             reload(resetViewport: false)
         }
     }
@@ -365,8 +406,11 @@ extension HRDatabase.SessionInfo {
 struct SessionGraphView: View {
     @EnvironmentObject private var model: AppModel
     @EnvironmentObject private var hr: HeartRateManager
+    @Environment(\.scenePhase) private var scenePhase
 
-    let session: HRDatabase.SessionInfo
+    /// Starts as the caller's snapshot; re-fetched once when the recording
+    /// stops so `endedAt` lands and the duration freezes (HRGRAPH-END01).
+    @State private var session: HRDatabase.SessionInfo
 
     @State private var buckets: [HRDatabase.HRBucket] = []
     @State private var loadedBucketSeconds: Double = 1
@@ -376,11 +420,21 @@ struct SessionGraphView: View {
     @State private var shareURL: URL?
     @State private var refreshTimer: Timer?
     @State private var loadGeneration = 0
+    /// True while the newest-generation load is running; timer ticks skip
+    /// instead of piling further reads onto the serial DB queue.
+    @State private var loadInFlight = false
+    /// Whether the screen is on screen (onAppear/onDisappear), so a scenePhase
+    /// flip back to .active never resurrects the timer for a covered view.
+    @State private var isVisible = false
+
+    init(session: HRDatabase.SessionInfo) {
+        _session = State(initialValue: session)
+    }
 
     /// This screen was opened on the session currently being recorded.
-    /// `session` is a snapshot, so a session that ends while on screen keeps
-    /// refreshing until the recording flag flips — harmless (the query just
-    /// finds no newer samples) and it picks up the final readings.
+    /// When the recording flag flips false, `.onChange` below runs one final
+    /// reload (the last ≤5 s of samples) and re-fetches the session row so
+    /// `endedAt` is set and the displayed duration stops counting.
     private var isActive: Bool {
         session.endedAt == nil && hr.isRecording && hr.activeSessionID == session.id
     }
@@ -439,10 +493,42 @@ struct SessionGraphView: View {
             ShareSheet(items: [url])
         }
         .onAppear {
+            isVisible = true
             reload(resetViewport: !loadedOnce)
             startRefreshTimer()
         }
-        .onDisappear { stopRefreshTimer() }
+        .onDisappear {
+            isVisible = false
+            stopRefreshTimer()
+        }
+        // Same scenePhase contract as HRGRAPH-BG01: no polling while backgrounded.
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active {
+                guard isVisible else { return }
+                if session.endedAt == nil { reload(resetViewport: false) }
+                startRefreshTimer()
+            } else {
+                stopRefreshTimer()
+            }
+        }
+        // AIDEV-NOTE: HRGRAPH-END01 — recording stopped: one final reload catches the last ≤5 s of
+        // samples, and the row re-fetch sets endedAt so durationString stops tracking Date().
+        .onChange(of: hr.isRecording) { _, recording in
+            guard !recording, session.endedAt == nil else { return }
+            reload(resetViewport: false)
+            refreshSessionRow()
+        }
+    }
+
+    /// Re-fetch this session's row off-main (DB reads are `queue.sync`) and
+    /// swap the snapshot, freezing `endedAt`/duration once recording stops.
+    private func refreshSessionRow() {
+        let db = model.db
+        let id = session.id
+        DispatchQueue.global(qos: .userInitiated).async {
+            guard let updated = db.session(id: id) else { return }
+            DispatchQueue.main.async { session = updated }
+        }
     }
 
     private var durationString: String {
@@ -454,6 +540,7 @@ struct SessionGraphView: View {
     private func reload(resetViewport: Bool) {
         loadGeneration += 1
         let generation = loadGeneration
+        loadInFlight = true
         let db = model.db
         let from = session.startedAt
         // +1 s slop on the exclusive upper bound so a sample stamped exactly
@@ -467,6 +554,7 @@ struct SessionGraphView: View {
                                           bucketSeconds: width)
             DispatchQueue.main.async {
                 guard generation == loadGeneration else { return }
+                loadInFlight = false
                 apply(rows, bucketSeconds: width, resetViewport: resetViewport)
                 loadedOnce = true
             }
@@ -496,7 +584,7 @@ struct SessionGraphView: View {
         stopRefreshTimer()
         guard session.endedAt == nil else { return }
         refreshTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { _ in
-            guard isActive else { return }
+            guard isActive, !loadInFlight else { return }
             reload(resetViewport: false)
         }
     }
