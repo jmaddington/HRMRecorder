@@ -465,6 +465,15 @@ footer .wrap {
 }
 footer .links a { color: var(--text-dim); margin-left: 18px; }
 footer .links a:hover { color: var(--text); text-decoration: none; }
+/* AIDEV-NOTE: footer .wrap is a wrapping flex row on every page; flex-basis:100%
+   gives the landing-page disclaimer its own row without touching other footers. */
+footer .disclaimer {
+  flex-basis: 100%;
+  max-width: 820px;
+  margin: 0 0 16px;
+  font-size: 13px;
+  line-height: 1.6;
+}
 
 /* ---------- Privacy page ---------- */
 
