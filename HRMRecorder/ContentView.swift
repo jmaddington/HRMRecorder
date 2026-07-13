@@ -10,6 +10,8 @@ struct ContentView: View {
     @State private var showDevicePicker = false
     @State private var deviceExpanded = false
     @State private var confirmForgetAll = false
+    // Evaluated once at view init — first launch only (see Disclaimer gate).
+    @State private var showDisclaimer = Disclaimer.shouldPresentOnLaunch
 
     private let tick = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
 
@@ -23,6 +25,14 @@ struct ContentView: View {
                 }
             }
             .navigationTitle("HRM Recorder")
+            // Attached here (not on the NavigationStack, which already hosts
+            // the device-picker sheet) so both sheets coexist cleanly. The
+            // onDismiss re-check hands off to the device picker if a fresh
+            // install is already scanning behind the disclaimer.
+            .sheet(isPresented: $showDisclaimer,
+                   onDismiss: { maybePresentPicker() }) {
+                DisclaimerView(isFirstRun: true)
+            }
         }
         .onAppear { maybePresentPicker() }
         .onReceive(tick) { now = $0 }
@@ -358,7 +368,8 @@ struct ContentView: View {
     /// invisibly and found monitors never appear unless the user knows to tap
     /// "Choose Device".
     private func maybePresentPicker() {
-        guard !showDevicePicker,
+        guard !showDisclaimer,        // first-run sheet has priority; retried on its dismiss
+              !showDevicePicker,
               hr.state == .scanning,
               !hr.isRecording,
               !hr.hasRememberedStrap
@@ -377,6 +388,7 @@ struct SessionsView: View {
     @State private var sessions: [HRDatabase.SessionInfo] = []
     @State private var shareURL: URL?
     @State private var confirmClear = false
+    @State private var showDisclaimer = false
     @State private var limitRange = false
     @State private var rangeStart = Calendar.current.date(byAdding: .day, value: -7, to: Date()) ?? Date()
     @State private var rangeEnd = Date()
@@ -488,6 +500,13 @@ struct SessionsView: View {
                 } label: {
                     Label("Server Sync", systemImage: "arrow.up.circle")
                 }
+                // Re-view of the first-run sheet; here it's a normal sheet
+                // with a Done button (no acknowledgment required).
+                Button {
+                    showDisclaimer = true
+                } label: {
+                    Label("About & Disclaimer", systemImage: "info.circle")
+                }
             }
 
             Section {
@@ -506,6 +525,9 @@ struct SessionsView: View {
         .onAppear { reload() }
         .sheet(item: $shareURL) { url in
             ShareSheet(items: [url])
+        }
+        .sheet(isPresented: $showDisclaimer) {
+            DisclaimerView(isFirstRun: false)
         }
         .alert("Delete all recorded data?", isPresented: $confirmClear) {
             Button("Delete Everything", role: .destructive) {
