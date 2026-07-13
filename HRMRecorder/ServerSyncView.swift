@@ -17,6 +17,7 @@ struct ServerSyncView: View {
     @State private var pending = 0
     @State private var confirmingDelete = false
     @State private var deleteResult = ""
+    @State private var confirmingResync = false
 
     private var serverURL: String { SyncSettings.serverURLString }
     private var urlIsValidHTTPS: Bool { SyncSettings.validatedBaseURL != nil }
@@ -114,6 +115,19 @@ struct ServerSyncView: View {
             }
 
             Section {
+                Button {
+                    confirmingResync = true
+                } label: {
+                    Label("Force full resync", systemImage: "arrow.clockwise.circle")
+                }
+                .disabled(!enabled || !urlIsValidHTTPS)
+            } header: {
+                Text("Repair")
+            } footer: {
+                Text("Re-uploads every heart-rate sample stored on this device, ignoring the saved sync position. Use this if the dashboard is missing data or the sync position looks wrong. The server ignores samples it already has, so this is safe — it only costs time and battery, never duplicates. May take several minutes for a large history.")
+            }
+
+            Section {
                 Button(role: .destructive) {
                     confirmingDelete = true
                 } label: {
@@ -142,6 +156,17 @@ struct ServerSyncView: View {
             Button("Cancel", role: .cancel) { }
         } message: {
             Text("Only sessions whose samples are all confirmed on the server will be removed. The current recording and any not-yet-synced sessions are kept.")
+        }
+        .confirmationDialog("Force a full resync?",
+                            isPresented: $confirmingResync,
+                            titleVisibility: .visible) {
+            Button("Re-upload everything") {
+                uploader.forceResync()
+                refresh()
+            }
+            Button("Cancel", role: .cancel) { }
+        } message: {
+            Text("Every sample on this device is sent to the server again. Already-synced samples are ignored by the server, so nothing is duplicated — this only refills missing data. It may take a while and use battery.")
         }
     }
 

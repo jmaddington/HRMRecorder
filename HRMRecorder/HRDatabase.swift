@@ -15,7 +15,9 @@ final class HRDatabase {
     struct SessionInfo: Identifiable, Hashable {
         let id: String
         let startedAt: Date
-        let endedAt: Date?
+        // `var`: SessionGraphView freezes a local copy's endedAt if the row
+        // is deleted while its detail screen is open (never written back).
+        var endedAt: Date?
         let deviceName: String?
         let manufacturer: String?
         let model: String?
@@ -334,6 +336,107 @@ final class HRDatabase {
 
     func sampleCount(sessionID: String) -> Int {
         scalarCount("SELECT COUNT(*) FROM samples WHERE session_id = ?;", bind: sessionID)
+    }
+
+    // MARK: - Graph aggregation (read-only, bounded — HRMRecorder-flq)
+
+    // AIDEV-NOTE: Graph reads are queue.sync and BOUNDED: one SQL aggregate returns bucket rows
+    // only — never raw samples — so a 30-day graph costs ~300 small structs, not millions.
+
+    /// One aggregated time bucket for charting. `startDate` is the bucket's
+    /// leading edge (`bucketIndex * bucketSeconds`). Only buckets that contain
+    /// data are ever produced; consumers detect recording gaps by looking for
+    /// non-consecutive `bucketIndex` values (no empty buckets are materialized).
+    struct HRBucket: Identifiable, Hashable {
+        let bucketIndex: Int64
+        let startDate: Date
+        let count: Int
+        let minBPM: Int
+        let avgBPM: Double
+        let maxBPM: Int
+        var id: Int64 { bucketIndex }
+    }
+
+    /// Hard cap on rows one graph query may return. Callers scale
+    /// `bucketSeconds` for ≤ ~400 buckets; the LIMIT makes a bad window/width
+    /// combination degrade (truncate) instead of ballooning memory.
+    /// AIDEV-NOTE: HRGRAPH-DB02 — cap keeps the NEWEST buckets (DESC LIMIT, reversed in Swift);
+    /// ASC would silently drop the most recent data — the worst cut for a trailing time-series.
+    private static let maxGraphBuckets = 2048
+
+    /// Aggregate samples into fixed-width time buckets in one SQL pass:
+    /// COUNT/MIN/AVG/MAX(bpm) grouped by `floor(ts / bucketSeconds)`.
+    /// `sessionID == nil` spans every session (and therefore every strap).
+    /// `from` is inclusive, `to` exclusive, matching `exportCSV`'s bounds.
+    func bucketedSamples(sessionID: String?,
+                         from: Date,
+                         to: Date,
+                         bucketSeconds: Double) -> [HRBucket] {
+        let width = max(1.0, bucketSeconds)
+        assert(to.timeIntervalSince(from) / width <= Double(Self.maxGraphBuckets) + 1,
+               "bucketSeconds too fine for window — result will truncate")
+        return queue.sync {
+            var out: [HRBucket] = []
+            var stmt: OpaquePointer?
+            // AIDEV-NOTE: CAST truncates toward zero; ts is epoch seconds (> 0) so this is floor().
+            var sql = """
+                SELECT CAST(ts / ? AS INTEGER) AS bucket,
+                       COUNT(*), MIN(bpm), AVG(bpm), MAX(bpm)
+                FROM samples
+                WHERE ts >= ? AND ts < ?
+                """
+            if sessionID != nil { sql += " AND session_id = ?" }
+            // DESC + LIMIT keeps the newest buckets when over cap (HRGRAPH-DB02);
+            // reversed below so callers still receive the series ascending.
+            sql += " GROUP BY bucket ORDER BY bucket DESC LIMIT \(Self.maxGraphBuckets);"
+            if sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK {
+                sqlite3_bind_double(stmt, 1, width)
+                sqlite3_bind_double(stmt, 2, from.timeIntervalSince1970)
+                sqlite3_bind_double(stmt, 3, to.timeIntervalSince1970)
+                if let sid = sessionID {
+                    sqlite3_bind_text(stmt, 4, sid, -1, SQLITE_TRANSIENT)
+                }
+                while sqlite3_step(stmt) == SQLITE_ROW {
+                    let index = sqlite3_column_int64(stmt, 0)
+                    out.append(HRBucket(
+                        bucketIndex: index,
+                        startDate: Date(timeIntervalSince1970: Double(index) * width),
+                        count: Int(sqlite3_column_int(stmt, 1)),
+                        minBPM: Int(sqlite3_column_int(stmt, 2)),
+                        avgBPM: sqlite3_column_double(stmt, 3),
+                        maxBPM: Int(sqlite3_column_int(stmt, 4))))
+                }
+            }
+            sqlite3_finalize(stmt)
+            if out.count == Self.maxGraphBuckets {
+                NSLog("[HRMRecorder] graph bucket query hit row cap; series may be truncated [HRGRAPH-DB01]")
+            }
+            out.reverse()   // DESC query order -> ascending for callers
+            return out
+        }
+    }
+
+    /// First/last sample timestamps across all sessions — the cheapest "does
+    /// any data exist, and when" probe, used by graph empty states. Two
+    /// single-aggregate queries so SQLite's MIN/MAX index optimization can
+    /// serve each from `idx_samples_ts` without a scan.
+    func sampleExtent() -> (first: Date, last: Date)? {
+        queue.sync {
+            func scalarTS(_ sql: String) -> Double? {
+                var stmt: OpaquePointer?
+                var value: Double?
+                if sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK,
+                   sqlite3_step(stmt) == SQLITE_ROW,
+                   sqlite3_column_type(stmt, 0) != SQLITE_NULL {
+                    value = sqlite3_column_double(stmt, 0)
+                }
+                sqlite3_finalize(stmt)
+                return value
+            }
+            guard let lo = scalarTS("SELECT MIN(ts) FROM samples;"),
+                  let hi = scalarTS("SELECT MAX(ts) FROM samples;") else { return nil }
+            return (Date(timeIntervalSince1970: lo), Date(timeIntervalSince1970: hi))
+        }
     }
 
     // MARK: - Upload (read-only, bounded — Server Sync Protocol v1)

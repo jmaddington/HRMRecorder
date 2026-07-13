@@ -10,6 +10,9 @@ struct ContentView: View {
     @State private var showDevicePicker = false
     @State private var deviceExpanded = false
     @State private var confirmForgetAll = false
+    // Recomputed on every ContentView init; @State applies the initial value
+    // only once per state lifetime (see Disclaimer gate).
+    @State private var showDisclaimer = Disclaimer.shouldPresentOnLaunch
 
     private let tick = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
 
@@ -23,6 +26,14 @@ struct ContentView: View {
                 }
             }
             .navigationTitle("HRM Recorder")
+            // Attached here (not on the NavigationStack, which already hosts
+            // the device-picker sheet) so both sheets coexist cleanly. The
+            // onDismiss re-check hands off to the device picker if a fresh
+            // install is already scanning behind the disclaimer.
+            .sheet(isPresented: $showDisclaimer,
+                   onDismiss: { maybePresentPicker() }) {
+                DisclaimerView(isFirstRun: true)
+            }
         }
         .onAppear { maybePresentPicker() }
         .onReceive(tick) { now = $0 }
@@ -88,12 +99,19 @@ struct ContentView: View {
         }
     }
 
+    /// Shared by both layout variants, so Sessions AND Graphs appear in
+    /// portrait and landscape alike (see the layout-contract note above).
     private var sessionsLinkSection: some View {
         Section {
             NavigationLink {
                 SessionsView()
             } label: {
                 Label("Sessions", systemImage: "list.bullet.rectangle")
+            }
+            NavigationLink {
+                HRHistoryGraphView()
+            } label: {
+                Label("Graphs", systemImage: "chart.xyaxis.line")
             }
         } footer: {
             Text(Self.versionString)
@@ -351,7 +369,8 @@ struct ContentView: View {
     /// invisibly and found monitors never appear unless the user knows to tap
     /// "Choose Device".
     private func maybePresentPicker() {
-        guard !showDevicePicker,
+        guard !showDisclaimer,        // first-run sheet has priority; retried on its dismiss
+              !showDevicePicker,
               hr.state == .scanning,
               !hr.isRecording,
               !hr.hasRememberedStrap
@@ -370,6 +389,7 @@ struct SessionsView: View {
     @State private var sessions: [HRDatabase.SessionInfo] = []
     @State private var shareURL: URL?
     @State private var confirmClear = false
+    @State private var showDisclaimer = false
     @State private var limitRange = false
     @State private var rangeStart = Calendar.current.date(byAdding: .day, value: -7, to: Date()) ?? Date()
     @State private var rangeEnd = Date()
@@ -381,21 +401,27 @@ struct SessionsView: View {
                     Text("No sessions yet").foregroundStyle(.secondary)
                 }
                 ForEach(sessions) { s in
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(s.startedAt, format: .dateTime.year().month().day()
-                            .hour().minute().second())
-                            .font(.subheadline.weight(.medium))
-                        HStack(spacing: 10) {
-                            Label("\(s.sampleCount)", systemImage: "waveform.path.ecg")
-                            if let sensor = sessionSensorLabel(s) {
-                                Label(sensor, systemImage: "sensor.tag.radiowaves.forward")
+                    // Row pushes the per-session graph; swipe actions
+                    // (Delete / CSV) are unchanged.
+                    NavigationLink {
+                        SessionGraphView(session: s)
+                    } label: {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(s.startedAt, format: .dateTime.year().month().day()
+                                .hour().minute().second())
+                                .font(.subheadline.weight(.medium))
+                            HStack(spacing: 10) {
+                                Label("\(s.sampleCount)", systemImage: "waveform.path.ecg")
+                                if let sensor = s.sensorLabel {
+                                    Label(sensor, systemImage: "sensor.tag.radiowaves.forward")
+                                }
+                                if s.endedAt == nil {
+                                    Text("active").foregroundStyle(.red)
+                                }
                             }
-                            if s.endedAt == nil {
-                                Text("active").foregroundStyle(.red)
-                            }
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
                         }
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
                     }
                     .swipeActions(edge: .trailing) {
                         Button(role: .destructive) {
@@ -475,6 +501,13 @@ struct SessionsView: View {
                 } label: {
                     Label("Server Sync", systemImage: "arrow.up.circle")
                 }
+                // Re-view of the first-run sheet; here it's a normal sheet
+                // with a Done button (no acknowledgment required).
+                Button {
+                    showDisclaimer = true
+                } label: {
+                    Label("About & Disclaimer", systemImage: "info.circle")
+                }
             }
 
             Section {
@@ -493,6 +526,9 @@ struct SessionsView: View {
         .onAppear { reload() }
         .sheet(item: $shareURL) { url in
             ShareSheet(items: [url])
+        }
+        .sheet(isPresented: $showDisclaimer) {
+            DisclaimerView(isFirstRun: false)
         }
         .alert("Delete all recorded data?", isPresented: $confirmClear) {
             Button("Delete Everything", role: .destructive) {
@@ -520,15 +556,6 @@ struct SessionsView: View {
         guard let to = cal.date(byAdding: .day, value: 1,
                                  to: cal.startOfDay(for: rangeEnd)) else { return nil }
         return (from, to)
-    }
-
-    /// Prefer recorded sensor model over the advertised BLE name.
-    private func sessionSensorLabel(_ s: HRDatabase.SessionInfo) -> String? {
-        let identity = [s.manufacturer, s.model].compactMap { $0 }.joined(separator: " ")
-        if !identity.isEmpty {
-            return s.bodyLocation.map { "\(identity) (\($0))" } ?? identity
-        }
-        return s.deviceName
     }
 
     private func reload() {

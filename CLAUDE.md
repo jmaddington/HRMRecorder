@@ -86,8 +86,10 @@ the work, not a separate ask:
   (`membershipExceptions = (Info.plist)`). Any other non-source file that must
   not be bundled as a resource needs adding to that exception set, or the build
   fails with "Multiple commands produce …".
-- Deployment target is **iOS 16.0**. iOS 17+ APIs will compile-fail (e.g.
-  `symbolEffect` was already hit and replaced with a manual animation).
+- Deployment targets: **app target iOS 18.6**, widget target **16.1**
+  (project-level default 16.0 is overridden by both targets). iOS 17+ APIs
+  (e.g. Swift Charts scrolling, `MagnifyGesture`) are fine in app-target
+  code; keep widget code to 16.1-safe APIs.
 - `SWIFT_VERSION = 5.0` is intentional: it avoids Swift 6 strict-concurrency
   errors against the CoreBluetooth delegate pattern. Bumping to 6 requires
   adding actor-isolation annotations throughout `HeartRateManager`.

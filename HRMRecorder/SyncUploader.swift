@@ -25,6 +25,7 @@ final class SyncUploader: ObservableObject {
     private let gate = DispatchQueue(label: "com.hrmrecorder.sync.gate")
     private var running = false
     private var pending = false
+    private var pendingFull = false   // a user-requested full resync is queued
     private var backoff: TimeInterval = 0
 
     private enum SyncError: Error { case unauthorized, transient, configChanged }
@@ -52,10 +53,31 @@ final class SyncUploader: ObservableObject {
         }
     }
 
+    /// User-initiated **full re-push** (SYNC_PROTOCOL §8 manual cursor repair).
+    /// Re-uploads every local sample, ignoring the saved cursor, so the server
+    /// backfills anything it is missing. Server ingest is idempotent on
+    /// `(account, client_session_id, client_sample_id)`, so already-stored
+    /// samples are dropped silently — this only costs bandwidth/CPU, never
+    /// duplicates. Coalesces behind an in-flight pass and takes priority over a
+    /// queued normal sync (a full pass is a superset of an incremental one).
+    func forceResync() {
+        guard SyncSettings.isEnabled else { return }
+        gate.async {
+            if self.running { self.pendingFull = true; return }
+            self.running = true
+            Task { await self.runFullResync() }
+        }
+    }
+
     private func finish() {
         gate.async {
             self.running = false
-            if self.pending {
+            if self.pendingFull {
+                self.pendingFull = false
+                self.pending = false
+                self.running = true
+                Task { await self.runFullResync() }
+            } else if self.pending {
                 self.pending = false
                 self.running = true
                 Task { await self.runOnce(reason: "coalesced") }
@@ -140,6 +162,73 @@ final class SyncUploader: ObservableObject {
             SyncSettings.cursorSampleID = 0
         } else if let serverMax = state.maxClientSampleID, serverMax < cursor {
             SyncSettings.cursorSampleID = serverMax
+        }
+    }
+
+    /// SYNC_PROTOCOL §8 manual full resync. Unlike `runOnce`, this walks the
+    /// LOCAL sample table from the start by `samples.id` and advances the walk
+    /// by the last id in each page — never by the server's
+    /// `max_client_sample_id`. That distinction is the whole point: the server
+    /// cursor reports the highest id it already holds for the batch's sessions,
+    /// so advancing by it would leapfrog past interior samples the server is
+    /// actually missing and the gap would never be refilled. Over-sending is
+    /// safe (idempotent), so we simply offer every local sample exactly once.
+    private func runFullResync() async {
+        defer { finish() }
+
+        guard SyncSettings.isEnabled, SyncSettings.validatedBaseURL != nil else {
+            setStatus("Not configured"); return
+        }
+        guard let bearer = await auth.currentBearer() else {
+            setStatus("Sign in to enable sync"); return
+        }
+        let cap = max(1, await auth.discover()?.maxSamplesPerRequest ?? 1000)
+
+        do {
+            try await post("devices",
+                           ["items": db.devicesForUpload().map(Self.encodeDevice)],
+                           bearer: bearer)
+            try await post("sessions",
+                           ["items": db.sessionsForUpload().map(Self.encodeSession)],
+                           bearer: bearer)
+
+            var afterID = 0
+            var limit = cap
+            var resent = 0
+            while true {
+                let batch = db.samplesForUpload(afterID: afterID, limit: limit)
+                if batch.isEmpty { break }
+                let (code, data) = try await postRaw(
+                    "samples",
+                    ["items": batch.map(Self.encodeSample)],
+                    bearer: bearer)
+                if code == 200 {
+                    // Advance by the LOCAL walk so every sample is offered once,
+                    // regardless of what the server already holds.
+                    afterID = batch.last!.clientSampleID
+                    resent += batch.count
+                    limit = cap
+                    setStatus("Re-uploading… \(resent) sent")
+                } else if code == 413 {
+                    let advertised = (try? JSONDecoder().decode(
+                        BatchTooLarge.self, from: data))?.error.max
+                    limit = max(1, min(advertised ?? limit, batch.count) / 2)
+                } else if code == 401 {
+                    throw SyncError.unauthorized
+                } else {
+                    throw SyncError.transient
+                }
+            }
+            // Settle the incremental cursor at the tail so normal sync resumes
+            // cleanly (never move it backwards).
+            SyncSettings.cursorSampleID = max(SyncSettings.cursorSampleID, afterID)
+            backoff = 0
+            setStatus("Full resync done \(Self.stamp()) — \(resent) samples")
+        } catch SyncError.unauthorized {
+            setStatus("Sign in again \(Self.stamp())")
+        } catch {
+            setStatus("Resync interrupted \(Self.stamp()) — will retry")
+            scheduleBackoff()
         }
     }
 

@@ -213,6 +213,16 @@ on trigger (session end, app foreground/background, retry timer):
 `GET sessions/{id}` and set `cursor = min(local, server.max_client_sample_id)`
 so anything the server lacks is re-sent. Idempotent ⇒ over-sending is safe.
 
+**Manual full resync** (user-initiated, "Force full resync" in Server Sync):
+re-offers *every* local sample regardless of the cursor, for when the server is
+missing data the automatic repair can't detect. It walks `local samples ORDER BY
+id` and advances by the **last local id in each page** — NOT by
+`resp.max_client_sample_id`. Advancing by the server cursor would jump past
+samples the server is still missing (the server reports the max id it *holds*
+for the batch's sessions, which can be ahead of an interior gap). The cursor is
+re-settled to the local tail at the end so incremental sync resumes normally.
+Idempotent ⇒ this only costs bandwidth/CPU, never duplicates.
+
 ## 9. Errors
 
 JSON error body on non-2xx: `{"error":{"code":"...","message":"..."}}`.
