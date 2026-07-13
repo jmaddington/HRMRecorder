@@ -208,7 +208,7 @@ struct HRHistoryGraphView: View {
     @EnvironmentObject private var model: AppModel
     @EnvironmentObject private var hr: HeartRateManager
 
-    @State private var range: HRGraphRange = .hour24
+    @State private var range: HRGraphRange
     @State private var buckets: [HRDatabase.HRBucket] = []
     @State private var loadedBucketSeconds: Double = 1
     @State private var viewport: HRGraphViewport?
@@ -219,6 +219,12 @@ struct HRHistoryGraphView: View {
     @State private var latestSample: Date?
     @State private var refreshTimer: Timer?
     @State private var loadGeneration = 0
+
+    /// `initialRange` exists for the DEBUG screenshot flow (deterministic
+    /// captures of each range); in-app navigation uses the default.
+    init(initialRange: HRGraphRange = .hour24) {
+        _range = State(initialValue: initialRange)
+    }
 
     var body: some View {
         List {

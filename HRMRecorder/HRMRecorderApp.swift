@@ -41,7 +41,12 @@ struct HRMRecorderApp: App {
         } else if args.contains("-HRMScreenshotPicker") {
             DevicePickerView(onSelect: { _ in })
         } else if args.contains("-HRMScreenshotGraphs") {
-            NavigationStack { HRHistoryGraphView() }
+            // Optional "-HRMScreenshotGraphsRange 30D" (any picker label)
+            // presets the range, since screenshot automation can't tap the
+            // segmented control. Launch args auto-bridge into UserDefaults.
+            let label = UserDefaults.standard.string(forKey: "HRMScreenshotGraphsRange")
+            let range = HRGraphRange.allCases.first { $0.label == label } ?? .hour24
+            NavigationStack { HRHistoryGraphView(initialRange: range) }
         } else if args.contains("-HRMScreenshotSessionGraph"),
                   let target = Self.sessionGraphScreenshotTarget(model.db) {
             // Combine with -HRMSeedFakeSessions so a fixture session exists.
