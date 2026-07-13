@@ -40,6 +40,12 @@ struct HRMRecorderApp: App {
             NavigationStack { SessionsView() }
         } else if args.contains("-HRMScreenshotPicker") {
             DevicePickerView(onSelect: { _ in })
+        } else if args.contains("-HRMScreenshotGraphs") {
+            NavigationStack { HRHistoryGraphView() }
+        } else if args.contains("-HRMScreenshotSessionGraph"),
+                  let target = Self.sessionGraphScreenshotTarget(model.db) {
+            // Combine with -HRMSeedFakeSessions so a fixture session exists.
+            NavigationStack { SessionGraphView(session: target) }
         } else {
             ContentView()
         }
@@ -47,6 +53,16 @@ struct HRMRecorderApp: App {
         ContentView()
         #endif
     }
+
+    #if DEBUG
+    /// Session shown by `-HRMScreenshotSessionGraph`: prefer the intervals
+    /// fixture (the most dramatic curve), else the newest session. DEBUG
+    /// screenshot path only — this sync read never runs in Release.
+    private static func sessionGraphScreenshotTarget(_ db: HRDatabase) -> HRDatabase.SessionInfo? {
+        let sessions = db.sessions()
+        return sessions.first { $0.id == "fixture-2026-cyclingintervals" } ?? sessions.first
+    }
+    #endif
 }
 
 /// Owns the single database, the BLE manager bound to it, and the optional

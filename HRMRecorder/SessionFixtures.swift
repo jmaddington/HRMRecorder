@@ -149,6 +149,19 @@ enum SessionFixtures {
         let backup = backupStrapID
 
         return [
+            // Recent session (~3h ago) so the history graph's 6H/24H ranges
+            // aren't empty in -HRMScreenshotGraphs captures (the other
+            // fixtures all sit 2+ days back and only show at 7D/30D).
+            Spec(id: "fixture-2026-lunchrun",
+                 startedAt: now.addingTimeInterval(-3 * 3600),
+                 durationSeconds: 42 * 60,
+                 label: "HRM-Pro+ (fixture)",
+                 deviceID: primary,
+                 manufacturer: "Garmin", model: "HRM-Pro+", firmware: "12.10",
+                 bodyLocation: "Chest",
+                 bpmCurve: steadyCardio(rest: 74, peak: 158),
+                 secondaryDeviceID: nil),
+
             Spec(id: "fixture-2026-restmorning",
                  startedAt: now.addingTimeInterval(-2 * day - 9 * 3600),
                  durationSeconds: 14 * 60,
