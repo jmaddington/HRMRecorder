@@ -102,7 +102,7 @@ The token (OAuth or static) is opaque to the app and is stored in the iOS
 
 | Name | Type | Origin | Stability |
 |---|---|---|---|
-| `client_session_id` | string (≤ 64) | App `sessions.id`, e.g. `20260519T143012Z-a3f` | Stable forever for that recording |
+| `client_session_id` | string (≤ 64) | App `sessions.id`, e.g. `20260519T143012Z-a3f` | Stable forever for that recording; **never reused across installs** |
 | `client_sample_id` | int64 | App `samples.id` (SQLite `AUTOINCREMENT`) | Strictly increasing per install; the sync cursor |
 | `client_device_id` | string (≤ 64) | Strap `CBPeripheral` UUID | Stable per physical strap per install |
 
@@ -110,6 +110,24 @@ All three are client-generated. The server treats them as opaque natural
 keys scoped to the authenticated account, assigns its own primary keys, and
 must never require the client to know server-side keys. There are no account
 identifiers on the wire — the token *is* the account.
+
+**Single-writer rule (load-bearing).** The sample identity tuple is
+`(account, client_session_id, client_sample_id)` and carries **no install
+component**, while `client_sample_id` is only unique *per install*. Two
+installs of the same account that ever write the **same** `client_session_id`
+therefore mint colliding keys, and the server — correctly, per §5 — silently
+drops the later arrival as a duplicate. That loss is unrecoverable: it is a
+key collision, not a gap, so no amount of re-sending or cursor repair can
+heal it.
+
+A client MUST NOT reuse a `client_session_id` across installs. The hazard is
+not hypothetical: an iPhone-to-iPhone device transfer copies the app's
+preferences verbatim, so any "currently recording" marker held in preferences
+is copied too, and *both* phones will resume the same session while each
+allocates `samples.id` from the same watermark. HRM Recorder guards this by
+stamping the open session with `identifierForVendor` (per-device, so it
+changes on transfer) and refusing to resume a session another install opened.
+Servers need no change; this is purely a client obligation.
 
 ## 5. Endpoints
 
@@ -204,24 +222,44 @@ on trigger (session end, app foreground/background, retry timer):
   loop:
     batch = local samples WHERE id > cursor ORDER BY id LIMIT N
     if empty: break
-    resp = POST samples { batch }
-    cursor = max(cursor, resp.max_client_sample_id)
+    POST samples { batch }
+    cursor = max(cursor, last local id in batch)   # NOT the server's value
   persist cursor
 ```
 
+**Never advance the cursor by `resp.max_client_sample_id`.** That field is the
+highest id the server holds across the *batch's sessions*, which is not the
+same thing as the highest id **you** just sent — another writer in the same
+session (§4) pushes it arbitrarily far ahead. Advancing by it leapfrogs local
+samples that are then never re-offered, and once the cursor passes the local
+tail every subsequent pass finds an empty batch and reports success having
+uploaded nothing. Advance by the last local id in the batch: you sent it and
+got a `2xx`, so it is exactly what is provably acked.
+
 **Cursor repair** (reinstall, lost local state, server restored old backup):
-`GET sessions/{id}` and set `cursor = min(local, server.max_client_sample_id)`
-so anything the server lacks is re-sent. Idempotent ⇒ over-sending is safe.
+
+- The cursor may never exceed the highest `samples.id` this install has ever
+  *allocated* (read the `AUTOINCREMENT` high-water mark, not `MAX(id)`, which
+  drops when synced rows are pruned locally). A larger value can only have
+  come from another writer; clamp it before trusting the cursor at all.
+- Probe the session that **owns the cursor** — the session of the greatest
+  local sample id at or below it — via `GET sessions/{id}`, then set
+  `cursor = min(local, server.max_client_sample_id)`. Do **not** probe simply
+  the newest session: that is normally the recording in progress, whose
+  samples are not on the server yet, so its `max_client_sample_id` is `0` and
+  a naive "server is behind" test rewinds the cursor to `0` on every pass.
+
+Idempotent ⇒ over-sending is safe.
 
 **Manual full resync** (user-initiated, "Force full resync" in Server Sync):
 re-offers *every* local sample regardless of the cursor, for when the server is
 missing data the automatic repair can't detect. It walks `local samples ORDER BY
-id` and advances by the **last local id in each page** — NOT by
-`resp.max_client_sample_id`. Advancing by the server cursor would jump past
-samples the server is still missing (the server reports the max id it *holds*
-for the batch's sessions, which can be ahead of an interior gap). The cursor is
-re-settled to the local tail at the end so incremental sync resumes normally.
-Idempotent ⇒ this only costs bandwidth/CPU, never duplicates.
+id` and advances by the **last local id in each page** — the same rule the
+incremental loop above follows, and for the same reason. On completion the
+cursor is re-settled to the local tail **unconditionally**, never
+`max(cursor, tail)`: a cursor parked *above* the tail is precisely the state
+this repair exists to clear, so refusing to move it backwards would preserve
+the damage. Idempotent ⇒ this only costs bandwidth/CPU, never duplicates.
 
 ## 9. Errors
 
