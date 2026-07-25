@@ -183,6 +183,18 @@ final class HeartRateManager: NSObject, ObservableObject {
     private let preferredDeviceKey = "preferredDeviceUUID"      // legacy single
     private let preferredDevicesKey = "preferredDeviceUUIDs"    // set of UUIDs
     private let activeSessionKey = "activeSessionID"
+    private let activeSessionInstallKey = "activeSessionInstallID"
+
+    // AIDEV-NOTE: HRMRecorder-c74 — install fingerprint guarding session
+    // resume. `identifierForVendor` is per-device, so it CHANGES on an
+    // iPhone-to-iPhone transfer even though UserDefaults is copied verbatim.
+    // That difference is the only reliable in-app signal that the DB we woke
+    // up on was authored somewhere else; every prefs-based marker is copied
+    // along with the thing it is supposed to distinguish.
+    /// Stable per-device identity for this install.
+    private static var installIdentity: String {
+        UIDevice.current.identifierForVendor?.uuidString ?? "unknown"
+    }
 
     /// Remembered straps to silently reconnect. Migrates the old single-key
     /// value once so an upgrading user keeps their strap.
@@ -333,6 +345,7 @@ final class HeartRateManager: NSObject, ObservableObject {
         let id = db.startSession(deviceName: name)
         sessionID = id
         UserDefaults.standard.set(id, forKey: activeSessionKey)
+        UserDefaults.standard.set(Self.installIdentity, forKey: activeSessionInstallKey)
         sessionSampleCount = 0
         sessionStartedAt = Date()
         isRecording = true
@@ -352,6 +365,7 @@ final class HeartRateManager: NSObject, ObservableObject {
         guard isRecording, let id = sessionID else { return }
         db.endSession(id)
         UserDefaults.standard.removeObject(forKey: activeSessionKey)
+        UserDefaults.standard.removeObject(forKey: activeSessionInstallKey)
         isRecording = false
         if #available(iOS 16.2, *) { liveActivity.end() }
         sessionID = nil
@@ -389,7 +403,31 @@ final class HeartRateManager: NSObject, ObservableObject {
         guard let id = UserDefaults.standard.string(forKey: activeSessionKey),
               let s = db.session(id: id), s.endedAt == nil else {
             UserDefaults.standard.removeObject(forKey: activeSessionKey)
+            UserDefaults.standard.removeObject(forKey: activeSessionInstallKey)
             return
+        }
+        // AIDEV-NOTE: HRMRecorder-c74 — never resume a session another install
+        // opened. A device-to-device transfer copies UserDefaults verbatim, so
+        // without this BOTH phones resume the same client_session_id while
+        // each allocates samples.id from the same watermark. The server's
+        // identity tuple is (account, client_session_id, client_sample_id), so
+        // the two installs collide and one phone's readings are dropped as
+        // duplicates — unrecoverable, because it is a key collision, not a gap.
+        let owner = UserDefaults.standard.string(forKey: activeSessionInstallKey)
+        if let owner, owner != Self.installIdentity {
+            db.endSessionAtLastSample(id)
+            UserDefaults.standard.removeObject(forKey: activeSessionKey)
+            UserDefaults.standard.removeObject(forKey: activeSessionInstallKey)
+            NSLog("[HRM] Session %@ was opened by another install — closed; a fresh session starts on next record [HRM-INSTALL-CHANGED]", id)
+            return
+        }
+        if owner == nil {
+            // Session predates this key (upgrade from a build without it).
+            // Adopt it rather than closing: we cannot tell "upgraded in place"
+            // from "transferred", and closing every upgrader's live session
+            // would be the far worse failure. Sessions opened from here on
+            // are stamped, so the guard above protects them.
+            UserDefaults.standard.set(Self.installIdentity, forKey: activeSessionInstallKey)
         }
         sessionID = id
         isRecording = true

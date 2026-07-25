@@ -152,6 +152,30 @@ final class HRDatabase {
         }
     }
 
+    // AIDEV-NOTE: HRMRecorder-c74 — used when abandoning a session opened by a
+    // DIFFERENT install (device-to-device transfer). Wall-clock "now" can be
+    // days past the last reading, so close at the final sample's ts instead.
+    /// Close `id` at the timestamp of its last sample, falling back to now
+    /// for a session that recorded nothing. No-op if already ended.
+    func endSessionAtLastSample(_ id: String) {
+        queue.async {
+            var stmt: OpaquePointer?
+            let sql = """
+                UPDATE sessions
+                   SET ended_at = IFNULL(
+                        (SELECT MAX(ts) FROM samples WHERE session_id = ?), ?)
+                 WHERE id = ? AND ended_at IS NULL;
+                """
+            if sqlite3_prepare_v2(self.db, sql, -1, &stmt, nil) == SQLITE_OK {
+                sqlite3_bind_text(stmt, 1, id, -1, SQLITE_TRANSIENT)
+                sqlite3_bind_double(stmt, 2, Date().timeIntervalSince1970)
+                sqlite3_bind_text(stmt, 3, id, -1, SQLITE_TRANSIENT)
+                sqlite3_step(stmt)
+            }
+            sqlite3_finalize(stmt)
+        }
+    }
+
     /// Attach sensor identity to a session. Device Information characteristics
     /// arrive asynchronously after connect, so this may be called repeatedly
     /// with partial data — COALESCE keeps the first non-null value for each
@@ -479,8 +503,9 @@ final class HRDatabase {
         let energyKJ: Int?
     }
 
-    /// Highest `samples.id` durably stored, or 0 when empty — the upper
-    /// bound the uploader's cursor can ever reach for this install.
+    /// Highest `samples.id` currently *stored*, or 0 when empty. Note this
+    /// DROPS when `deleteFullySyncedSessions` prunes rows — for the ceiling
+    /// the sync cursor is allowed to reach use `highestAllocatedSampleID()`.
     func maxSampleID() -> Int {
         queue.sync {
             var stmt: OpaquePointer?
@@ -492,6 +517,57 @@ final class HRDatabase {
             }
             sqlite3_finalize(stmt)
             return value
+        }
+    }
+
+    // AIDEV-NOTE: HRMRecorder-59s — the cursor's hard ceiling. Reads the
+    // AUTOINCREMENT high-water mark from `sqlite_sequence`, which (unlike
+    // MAX(id)) never drops when rows are pruned, because AUTOINCREMENT never
+    // reuses an id. A cursor above this claims the server acked ids this
+    // install has never issued, which can only come from another writer.
+    /// Highest `samples.id` this install has ever **allocated**, surviving
+    /// row deletion. Falls back to `MAX(id)` on a DB that has never inserted.
+    func highestAllocatedSampleID() -> Int {
+        queue.sync {
+            var stmt: OpaquePointer?
+            var value = 0
+            let sql = """
+                SELECT IFNULL(
+                    (SELECT seq FROM sqlite_sequence WHERE name = 'samples'),
+                    (SELECT IFNULL(MAX(id), 0) FROM samples));
+                """
+            if sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK,
+               sqlite3_step(stmt) == SQLITE_ROW {
+                value = Int(sqlite3_column_int64(stmt, 0))
+            }
+            sqlite3_finalize(stmt)
+            return value
+        }
+    }
+
+    // AIDEV-NOTE: HRMRecorder-abr — cursor repair must probe the session the
+    // cursor SITS IN, not the newest session. The newest session is usually
+    // the one recording right now, whose samples are not on the server yet,
+    // so its max_client_sample_id is 0 and a naive `serverMax < cursor` test
+    // rewinds the cursor to 0 on every single sync pass.
+    /// The session owning the greatest sample id at or below `id`, or nil
+    /// when no stored sample is that low (empty DB, or all pruned).
+    func sessionID(forSampleAtOrBefore id: Int) -> String? {
+        queue.sync {
+            var stmt: OpaquePointer?
+            var out: String?
+            let sql = """
+                SELECT session_id FROM samples
+                WHERE id <= ? ORDER BY id DESC LIMIT 1;
+                """
+            if sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK {
+                sqlite3_bind_int64(stmt, 1, sqlite3_int64(id))
+                if sqlite3_step(stmt) == SQLITE_ROW {
+                    out = String(cString: sqlite3_column_text(stmt, 0))
+                }
+            }
+            sqlite3_finalize(stmt)
+            return out
         }
     }
 

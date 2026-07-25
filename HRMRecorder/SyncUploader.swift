@@ -117,9 +117,18 @@ final class SyncUploader: ObservableObject {
                     ["items": batch.map(Self.encodeSample)],
                     bearer: bearer)
                 if code == 200 {
-                    let serverMax = (try? JSONDecoder().decode(
-                        SamplesResult.self, from: data))?.maxClientSampleID ?? 0
-                    cursor = max(cursor, serverMax)
+                    // AIDEV-NOTE: HRMRecorder-59s — advance by the LOCAL batch
+                    // tail, NEVER by resp.max_client_sample_id. The server
+                    // reports the highest id it holds across the batch's
+                    // *sessions*, which a second install writing the same
+                    // client_session_id can push far beyond our own tail;
+                    // trusting it leapfrogs local samples that then never
+                    // re-send, and once it passes the local tail every later
+                    // pass finds an empty batch and reports "Synced" having
+                    // moved nothing. We just sent everything up to this id and
+                    // got a 2xx, so it is exactly what we can prove is acked —
+                    // the same reasoning runFullResync uses (SYNC_PROTOCOL §8).
+                    cursor = max(cursor, batch.last!.clientSampleID)
                     SyncSettings.cursorSampleID = cursor
                     limit = cap                          // reset after success
                 } else if code == 413 {
@@ -148,17 +157,42 @@ final class SyncUploader: ObservableObject {
     /// from an old backup the client cursor may be ahead of the server.
     /// Pull it back to what the server actually has so the gap re-sends
     /// (idempotent — over-sending is safe).
+    ///
+    /// AIDEV-NOTE: two hard-won rules live here; both cost real user data.
+    /// 1. HRMRecorder-59s — the cursor can never legitimately exceed the
+    ///    highest id this install has ALLOCATED. A larger value means another
+    ///    writer's ids reached our cursor (a second install resuming the same
+    ///    session id — HRMRecorder-c74) and silently wedges sync forever.
+    ///    Clamp first, unconditionally, before trusting the cursor at all.
+    /// 2. HRMRecorder-abr — probe the session that OWNS the cursor, never
+    ///    simply the newest session. The newest session is normally the one
+    ///    recording right now, with nothing on the server yet, so its
+    ///    max_client_sample_id is 0 and a naive `serverMax < cursor` test
+    ///    rewinds to 0 every pass — a full re-walk of the entire history.
     private func repairCursorIfNeeded(bearer: String) async throws {
+        // Rule 1 — clamp to what this install has actually issued.
+        let allocated = db.highestAllocatedSampleID()
+        if SyncSettings.cursorSampleID > allocated {
+            NSLog("[HRM] Cursor %d exceeded allocated id %d — clamped [HRM-CURSOR-CLAMP]",
+                  SyncSettings.cursorSampleID, allocated)
+            SyncSettings.cursorSampleID = allocated
+        }
         let cursor = SyncSettings.cursorSampleID
-        guard cursor > 0, let latest = db.sessionsForUpload().last else { return }
-        let id = latest.clientSessionID
-            .addingPercentEncoding(withAllowedCharacters: .urlPathAllowed)
-            ?? latest.clientSessionID
+
+        // Rule 2 — probe the cursor's own session. If our cursor means
+        // anything, that is the session the server must already know.
+        guard cursor > 0,
+              let owning = db.sessionID(forSampleAtOrBefore: cursor) else { return }
+        let id = owning.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed)
+            ?? owning
         let (code, data) = try await getRaw("sessions/\(id)", bearer: bearer)
         guard code == 200,
               let state = try? JSONDecoder().decode(SessionState.self, from: data)
         else { return }
-        if state.known != true {
+        if state.known != true || (state.sampleCount ?? 0) == 0 {
+            // The server has no trace of the session our cursor sits in — a
+            // restore from an older backup, or a different account. Nothing
+            // at or below the cursor can be trusted; re-offer everything.
             SyncSettings.cursorSampleID = 0
         } else if let serverMax = state.maxClientSampleID, serverMax < cursor {
             SyncSettings.cursorSampleID = serverMax
@@ -219,9 +253,14 @@ final class SyncUploader: ObservableObject {
                     throw SyncError.transient
                 }
             }
-            // Settle the incremental cursor at the tail so normal sync resumes
-            // cleanly (never move it backwards).
-            SyncSettings.cursorSampleID = max(SyncSettings.cursorSampleID, afterID)
+            // AIDEV-NOTE: HRMRecorder-uwa — settle at the local tail
+            // UNCONDITIONALLY. A max() here would preserve a cursor parked
+            // ABOVE the tail, which is the single case this repair exists to
+            // fix; "never move backwards" is the wrong instinct when the
+            // current value was never valid. Only reached on a completed walk
+            // (the catch path returns early), so by here every local sample
+            // has been offered and acked — the tail is precisely correct.
+            SyncSettings.cursorSampleID = afterID
             backoff = 0
             setStatus("Full resync done \(Self.stamp()) — \(resent) samples")
         } catch SyncError.unauthorized {
@@ -268,7 +307,7 @@ final class SyncUploader: ObservableObject {
             return r
         }
         let (data, resp) = try await net.data(for: try build(bearer))
-        var code = (resp as? HTTPURLResponse)?.statusCode ?? 0
+        let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
         // Single silent reauth: refresh via SyncAuth, retry once.
         if code == 401, let fresh = await auth.currentBearer(), fresh != bearer {
             let (d2, r2) = try await net.data(for: try build(fresh))
@@ -330,16 +369,16 @@ final class SyncUploader: ObservableObject {
 }
 
 // Decoders for the engine's own bookkeeping.
-private struct SamplesResult: Decodable {
-    let maxClientSampleID: Int
-    enum CodingKeys: String, CodingKey { case maxClientSampleID = "max_client_sample_id" }
-}
-
+// AIDEV-NOTE: there is deliberately no decoder for the POST samples response.
+// Its `max_client_sample_id` must NOT drive the cursor (HRMRecorder-59s) —
+// the upload loop advances by the local batch tail instead.
 private struct SessionState: Decodable {
     let known: Bool?
+    let sampleCount: Int?
     let maxClientSampleID: Int?
     enum CodingKeys: String, CodingKey {
         case known
+        case sampleCount = "sample_count"
         case maxClientSampleID = "max_client_sample_id"
     }
 }

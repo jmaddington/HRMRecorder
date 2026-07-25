@@ -15,6 +15,7 @@ struct ServerSyncView: View {
     @State private var testResult = ""
     @State private var signingIn = false
     @State private var pending = 0
+    @State private var cursorOverrun = 0
     @State private var confirmingDelete = false
     @State private var deleteResult = ""
     @State private var confirmingResync = false
@@ -101,6 +102,18 @@ struct ServerSyncView: View {
                                value: uploader.status.isEmpty ? "—" : uploader.status)
                 LabeledContent("Synced cursor", value: "\(SyncSettings.cursorSampleID)")
                 LabeledContent("Pending samples", value: "\(max(0, pending))")
+                // AIDEV-NOTE: HRMRecorder-59s — a cursor past the highest id
+                // this install ever ALLOCATED means sync silently uploads
+                // nothing while still reporting "Synced". Measured against the
+                // allocation high-water mark, not MAX(id): the latter drops
+                // when "Delete synced sessions" prunes rows, which would make
+                // an ordinary prune look like a wedged cursor.
+                if cursorOverrun > 0 {
+                    Label("Sync position is \(cursorOverrun) samples past anything recorded on this device — nothing will upload. Tap “Force full resync” below to repair.",
+                          systemImage: "exclamationmark.triangle")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                }
                 Button {
                     uploader.trigger("manual")
                     refresh()
@@ -174,6 +187,7 @@ struct ServerSyncView: View {
         enabled = SyncSettings.isEnabled
         signedIn = model.auth.isSignedIn
         pending = model.db.maxSampleID() - SyncSettings.cursorSampleID
+        cursorOverrun = SyncSettings.cursorSampleID - model.db.highestAllocatedSampleID()
     }
 
     private func signIn() {
